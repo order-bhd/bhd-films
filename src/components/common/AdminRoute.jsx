@@ -10,19 +10,17 @@ export default function AdminRoute({ children, permission }) {
   const isManualSuperAdmin =
     sessionStorage.getItem('bhd_superadmin') === 'true'
 
-  if (loading) return <Loader />
-
-  // Allow:
-  // 1. Manual Super Admin login
-  // OR
-  // 2. Normal Supabase Admin login
-  if (!isManualSuperAdmin && (!isLoggedIn || !isAdmin)) {
-    return <Navigate to="/admin/login" replace />
-  }
-
-  // Manual Super Admin gets full access
+  // Manual Super Admin gets immediate full access
   if (isManualSuperAdmin) {
     return children
+  }
+
+  // Wait only for normal Supabase authentication
+  if (loading) return <Loader />
+
+  // Normal Supabase Admin check
+  if (!isLoggedIn || !isAdmin) {
+    return <Navigate to="/admin/login" replace />
   }
 
   // Staff restrictions
