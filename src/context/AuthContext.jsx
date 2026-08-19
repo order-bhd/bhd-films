@@ -3,43 +3,34 @@ import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
 
-const isManualSuperAdmin = () => {
-  return sessionStorage.getItem('bhd_superadmin') === 'true'
-}
-
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
-  const [adminRole, setAdminRole] = useState(null)
+
+  // Check manual Super Admin login immediately
+  const [manualSuperAdmin, setManualSuperAdmin] = useState(() => {
+    return sessionStorage.getItem('bhd_superadmin') === 'true'
+  })
+
+  const [adminRole, setAdminRole] = useState(() => {
+    return sessionStorage.getItem('bhd_superadmin') === 'true'
+      ? 'super_admin'
+      : null
+  })
+
   const [adminPermissions, setAdminPermissions] = useState({})
   const [loading, setLoading] = useState(true)
-  const [manualSuperAdmin, setManualSuperAdmin] = useState(() =>
-    isManualSuperAdmin()
-  )
-
-  const SUPER_ADMIN_PERMISSIONS = {
-    view_customers: true,
-    manage_categories: true,
-    manage_services: true,
-    manage_rates: true,
-    manage_bulk_pricing: true,
-    manage_orders: true,
-    manage_fund_requests: true,
-    manage_wallets: true,
-    manage_payment_settings: true,
-    manage_offers: true,
-    manage_support: true,
-    view_audit_log: true,
-    manage_admins: true
-  }
 
   const loadProfile = useCallback(async (userId) => {
-    // MANUAL SUPER ADMIN HAS PRIORITY
-    if (isManualSuperAdmin()) {
+    // Manual Super Admin has full access
+    if (sessionStorage.getItem('bhd_superadmin') === 'true') {
       setManualSuperAdmin(true)
-      setProfile(null)
       setAdminRole('super_admin')
-      setAdminPermissions(SUPER_ADMIN_PERMISSIONS)
+      setAdminPermissions({})
+      setProfile({
+        id: 'manual-super-admin',
+        role: 'super_admin'
+      })
       return
     }
 
@@ -71,35 +62,51 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let mounted = true
 
-    // CHECK MANUAL SUPER ADMIN FIRST
-    if (isManualSuperAdmin()) {
-      setManualSuperAdmin(true)
-      setAdminRole('super_admin')
-      setAdminPermissions(SUPER_ADMIN_PERMISSIONS)
-      setLoading(false)
-    } else {
-      supabase.auth.getSession().then(({ data: { session: s } }) => {
+    async function initializeAuth() {
+      // First check manual Super Admin login
+      if (sessionStorage.getItem('bhd_superadmin') === 'true') {
         if (!mounted) return
 
-        setSession(s)
-        loadProfile(s?.user?.id).finally(() => {
-          if (mounted) setLoading(false)
+        setManualSuperAdmin(true)
+        setAdminRole('super_admin')
+        setAdminPermissions({})
+        setProfile({
+          id: 'manual-super-admin',
+          role: 'super_admin'
         })
-      })
+        setLoading(false)
+        return
+      }
+
+      // Otherwise check Supabase session
+      const {
+        data: { session: s }
+      } = await supabase.auth.getSession()
+
+      if (!mounted) return
+
+      setSession(s)
+      await loadProfile(s?.user?.id)
+
+      if (mounted) {
+        setLoading(false)
+      }
     }
 
+    initializeAuth()
+
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, s) => {
-        if (isManualSuperAdmin()) {
+      async (_event, s) => {
+        // Don't overwrite manual Super Admin login
+        if (sessionStorage.getItem('bhd_superadmin') === 'true') {
           setManualSuperAdmin(true)
           setAdminRole('super_admin')
-          setAdminPermissions(SUPER_ADMIN_PERMISSIONS)
-          setLoading(false)
           return
         }
 
         setSession(s)
-        loadProfile(s?.user?.id)
+        await loadProfile(s?.user?.id)
+        setLoading(false)
       }
     )
 
@@ -121,57 +128,52 @@ export function AuthProvider({ children }) {
   }, [])
 
   const signOut = useCallback(async () => {
-    // CLEAR MANUAL SUPER ADMIN LOGIN
+    // Remove manual Super Admin access
     sessionStorage.removeItem('bhd_superadmin')
+
     setManualSuperAdmin(false)
-    setSession(null)
-    setProfile(null)
     setAdminRole(null)
     setAdminPermissions({})
+    setProfile(null)
+    setSession(null)
 
-    // ALSO SIGN OUT SUPABASE USER
     await supabase.auth.signOut()
   }, [])
 
-  const refreshProfile = useCallback(() => {
-    if (isManualSuperAdmin()) {
+  const refreshProfile = useCallback(async () => {
+    if (sessionStorage.getItem('bhd_superadmin') === 'true') {
       setManualSuperAdmin(true)
       setAdminRole('super_admin')
-      setAdminPermissions(SUPER_ADMIN_PERMISSIONS)
-      return Promise.resolve()
+      return
     }
 
-    return loadProfile(session?.user?.id)
+    await loadProfile(session?.user?.id)
   }, [loadProfile, session])
-
-  const isSuperAdmin =
-    manualSuperAdmin || adminRole === 'super_admin'
 
   const value = {
     session,
 
-    // MANUAL SUPER ADMIN IS ALSO CONSIDERED LOGGED IN
+    // Manual Super Admin should also be treated as logged in
     user: manualSuperAdmin
-      ? { id: 'manual-super-admin', role: 'super_admin' }
+      ? { id: 'manual-super-admin', username: 'Superadmin' }
       : session?.user || null,
 
     profile,
 
     isLoggedIn: manualSuperAdmin || !!session?.user,
 
-    adminRole: isSuperAdmin
-      ? 'super_admin'
-      : adminRole,
+    adminRole: manualSuperAdmin ? 'super_admin' : adminRole,
 
-    adminPermissions: isSuperAdmin
-      ? SUPER_ADMIN_PERMISSIONS
-      : adminPermissions,
+    adminPermissions,
 
-    isAdmin: isSuperAdmin || !!adminRole,
+    // THIS IS THE IMPORTANT FIX
+    isAdmin: manualSuperAdmin || !!adminRole,
 
-    isSuperAdmin,
+    isSuperAdmin:
+      manualSuperAdmin || adminRole === 'super_admin',
 
     loading,
+
     signInWithGoogle,
     signOut,
     refreshProfile
