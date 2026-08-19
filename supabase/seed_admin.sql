@@ -12,7 +12,7 @@
 insert into public.admin_users (id, role, permissions)
 select id, 'super_admin', '{}'::jsonb
 from auth.users
-where email = 'orde.bhd@gmail.com'
+where email = 'you@example.com'
 on conflict (id) do update set role = 'super_admin';
 
 -- Verify it worked:
