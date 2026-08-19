@@ -13,53 +13,96 @@ export default function NotifyCustomersButton({
   const [error, setError] = useState('')
 
   async function handleClick() {
+    if (sending) return
+
     setSending(true)
     setError('')
     setResult(null)
 
     try {
-      // Get the currently logged-in user's session
+      // Get current logged-in admin session
       const {
-        data: { session },
-        error: sessionError
+        data: { session }
       } = await supabase.auth.getSession()
 
-      if (sessionError) {
-        throw new Error(sessionError.message)
-      }
-
       if (!session?.access_token) {
-        throw new Error(
-          'Your admin session has expired. Please logout and login again.'
+        setError(
+          'Your login session has expired. Please login again.'
         )
+        setSending(false)
+        return
       }
 
-      // Explicitly send the user's JWT to the Edge Function
-      const { data, error: fnError } =
-        await supabase.functions.invoke('send-push', {
+      console.log(
+        'Sending notification as authenticated admin'
+      )
+
+      const {
+        data,
+        error: fnError
+      } = await supabase.functions.invoke(
+        'send-push',
+        {
+          headers: {
+            Authorization:
+              `Bearer ${session.access_token}`
+          },
           body: {
             title,
             body,
             url,
             audience: 'all'
-          },
-          headers: {
-            Authorization: `Bearer ${session.access_token}`
           }
-        })
+        }
+      )
 
       if (fnError) {
-        console.error('Push function error:', fnError)
-        throw new Error(
-          fnError.message || 'Could not send notifications.'
+        console.error(
+          'Function error:',
+          fnError
         )
+
+        let message =
+          fnError.message ||
+          'Could not send notifications.'
+
+        // Try to show the real error returned
+        // by the Edge Function
+        if (fnError.context) {
+          try {
+            const errorData =
+              await fnError.context.json()
+
+            console.error(
+              'Function response:',
+              errorData
+            )
+
+            message =
+              errorData.error ||
+              errorData.details ||
+              message
+          } catch {
+            // Keep original message
+          }
+        }
+
+        setError(message)
+        return
       }
+
+      console.log(
+        'Notification result:',
+        data
+      )
 
       setResult(data)
     } catch (err) {
-      console.error('Notification error:', err)
+      console.error(err)
+
       setError(
-        err?.message || 'Could not send notifications.'
+        err.message ||
+        'Could not send notifications.'
       )
     } finally {
       setSending(false)
@@ -74,29 +117,40 @@ export default function NotifyCustomersButton({
         disabled={sending}
       >
         <BellRing size={14} />
-        {sending ? 'Sending…' : label}
+
+        {sending
+          ? 'Sending…'
+          : label}
       </button>
 
       {result && (
         <p
           className="text-faint"
-          style={{ fontSize: 10.5, marginTop: 4 }}
+          style={{
+            fontSize: 10.5,
+            marginTop: 4
+          }}
         >
           Sent to {result.sent} device
           {result.sent === 1 ? '' : 's'}
 
-          {result.removed > 0 &&
-            ` · ${result.removed} expired removed`}
+          {result.failed > 0
+            ? ` · ${result.failed} failed`
+            : ''}
 
-          {result.failed > 0 &&
-            ` · ${result.failed} failed`}
+          {result.removed > 0
+            ? ` · ${result.removed} expired removed`
+            : ''}
         </p>
       )}
 
       {error && (
         <p
           className="field-error"
-          style={{ fontSize: 10.5, marginTop: 4 }}
+          style={{
+            fontSize: 10.5,
+            marginTop: 4
+          }}
         >
           {error}
         </p>
