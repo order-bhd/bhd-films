@@ -2,54 +2,101 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ShieldCheck,
-  User,
+  Mail,
   Lock,
   Eye,
   EyeOff,
   Loader2
 } from 'lucide-react'
+import { supabase } from '../lib/supabase'
 
 export default function AdminLogin() {
   const navigate = useNavigate()
 
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [shake, setShake] = useState(false)
 
-  function handleLogin(e) {
+  async function handleLogin(e) {
     e.preventDefault()
+
     setError('')
     setShake(false)
     setLoading(true)
 
-    // IMPORTANT:
-    // Keep your existing Super Admin username/password values here
-    const SUPERADMIN_USERNAME = 'Superadmin'
-    const SUPERADMIN_PASSWORD = 'BHDflims@2030#'
+    try {
+      // LOGIN WITH SUPABASE
+      const { data, error: loginError } =
+        await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password
+        })
 
-    setTimeout(() => {
-      if (
-        username.trim() === SUPERADMIN_USERNAME &&
-        password === SUPERADMIN_PASSWORD
-      ) {
-        sessionStorage.setItem('bhd_superadmin', 'true')
-
-        // Small success delay for smooth animation
-        setTimeout(() => {
-          navigate('/admin', { replace: true })
-        }, 500)
-
-      } else {
-        setLoading(false)
-        setError('Invalid Super Admin username or password.')
-        setShake(true)
-
-        setTimeout(() => setShake(false), 500)
+      if (loginError) {
+        throw loginError
       }
-    }, 700)
+
+      if (!data?.user || !data?.session) {
+        throw new Error('Login failed. No valid session found.')
+      }
+
+      // CHECK IF THIS USER IS AN ADMIN
+      const { data: adminUser, error: adminError } =
+        await supabase
+          .from('admin_users')
+          .select('id, role')
+          .eq('id', data.user.id)
+          .maybeSingle()
+
+      if (adminError) {
+        console.error('Admin check error:', adminError)
+        await supabase.auth.signOut()
+
+        throw new Error(
+          'Could not verify admin access. Please check admin_users table.'
+        )
+      }
+
+      if (!adminUser) {
+        await supabase.auth.signOut()
+
+        throw new Error(
+          'You do not have Super Admin permission.'
+        )
+      }
+
+      // OPTIONAL: Allow only super_admin
+      if (adminUser.role !== 'super_admin') {
+        await supabase.auth.signOut()
+
+        throw new Error(
+          'This account does not have Super Admin access.'
+        )
+      }
+
+      // SUCCESS
+      navigate('/admin', { replace: true })
+
+    } catch (err) {
+      console.error('Login error:', err)
+
+      setError(
+        err.message ||
+        'Invalid email or password.'
+      )
+
+      setShake(true)
+
+      setTimeout(() => {
+        setShake(false)
+      }, 500)
+
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -155,7 +202,8 @@ export default function AdminLogin() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 12px 35px rgba(230, 160, 50, 0.18)'
+              boxShadow:
+                '0 12px 35px rgba(230, 160, 50, 0.18)'
             }}
           >
             <ShieldCheck size={32} color="#170f08" />
@@ -179,10 +227,10 @@ export default function AdminLogin() {
               fontSize: 13
             }}
           >
-            Restricted Super Admin access only.
+            Sign in with your authorized admin account.
           </p>
 
-          {/* USERNAME */}
+          {/* EMAIL */}
           <label
             style={{
               display: 'block',
@@ -190,11 +238,16 @@ export default function AdminLogin() {
               fontSize: 13
             }}
           >
-            Username
+            Email Address
           </label>
 
-          <div style={{ position: 'relative', marginBottom: 20 }}>
-            <User
+          <div
+            style={{
+              position: 'relative',
+              marginBottom: 20
+            }}
+          >
+            <Mail
               size={19}
               style={{
                 position: 'absolute',
@@ -208,14 +261,14 @@ export default function AdminLogin() {
 
             <input
               className="admin-input"
-              type="text"
-              placeholder="Enter username"
-              value={username}
+              type="email"
+              placeholder="Enter your email"
+              value={email}
               onChange={(e) => {
-                setUsername(e.target.value)
+                setEmail(e.target.value)
                 setError('')
               }}
-              autoComplete="username"
+              autoComplete="email"
               required
               style={{
                 width: '100%',
@@ -242,7 +295,12 @@ export default function AdminLogin() {
             Password
           </label>
 
-          <div style={{ position: 'relative', marginBottom: 12 }}>
+          <div
+            style={{
+              position: 'relative',
+              marginBottom: 12
+            }}
+          >
             <Lock
               size={19}
               style={{
@@ -282,7 +340,11 @@ export default function AdminLogin() {
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              aria-label={
+                showPassword
+                  ? 'Hide password'
+                  : 'Show password'
+              }
               style={{
                 position: 'absolute',
                 right: 14,
@@ -295,7 +357,11 @@ export default function AdminLogin() {
                 display: 'flex'
               }}
             >
-              {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              {showPassword ? (
+                <EyeOff size={20} />
+              ) : (
+                <Eye size={20} />
+              )}
             </button>
           </div>
 
@@ -339,7 +405,7 @@ export default function AdminLogin() {
             {loading ? (
               <>
                 <Loader2 size={21} className="spin" />
-                Verifying Access...
+                Signing In...
               </>
             ) : (
               <>
