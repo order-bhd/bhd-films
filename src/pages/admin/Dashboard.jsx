@@ -1,0 +1,149 @@
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { supabase } from '../../lib/supabase'
+import Loader from '../../components/common/Loader'
+import { formatCurrency, formatDate } from '../../utils/format'
+import { getRange } from '../../utils/dateRanges'
+
+const FILTERS = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This Week' },
+  { key: 'month', label: 'This Month' },
+  { key: 'all', label: 'All Time' }
+]
+
+export default function Dashboard() {
+  const navigate = useNavigate()
+  const [filter, setFilter] = useState('month')
+  const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState(null)
+  const [recentOrders, setRecentOrders] = useState([])
+  const [recentFundRequests, setRecentFundRequests] = useState([])
+
+  useEffect(() => {
+    let mounted = true
+    async function load() {
+      setLoading(true)
+      const { from } = filter === 'all' ? { from: null } : getRange(filter)
+
+      const [customersRes, newCustomersRes, walletsRes, ordersRes, fundReqRes, recentOrdersRes, recentFundRes] = await Promise.all([
+        supabase.from('profiles').select('id', { count: 'exact', head: true }),
+        from
+          ? supabase.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', from)
+          : supabase.from('profiles').select('id', { count: 'exact', head: true }),
+        supabase.from('wallets').select('available_fund, total_fund_added, total_fund_used'),
+        from
+          ? supabase.from('orders').select('id', { count: 'exact', head: true }).gte('created_at', from)
+          : supabase.from('orders').select('id', { count: 'exact', head: true }),
+        supabase.from('fund_requests').select('status').then((r) => r),
+        supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(6),
+        supabase.from('fund_requests').select('*').order('created_at', { ascending: false }).limit(6)
+      ])
+
+      const wallets = walletsRes.data || []
+      const totalBalance = wallets.reduce((s, w) => s + Number(w.available_fund), 0)
+      const totalAdded = wallets.reduce((s, w) => s + Number(w.total_fund_added), 0)
+      const totalUsed = wallets.reduce((s, w) => s + Number(w.total_fund_used), 0)
+
+      const fundStatuses = fundReqRes.data || []
+      const pending = fundStatuses.filter((r) => ['pending', 'under_review', 'reupload_required'].includes(r.status)).length
+      const approved = fundStatuses.filter((r) => r.status === 'approved').length
+      const rejected = fundStatuses.filter((r) => r.status === 'rejected').length
+
+      if (!mounted) return
+      setStats({
+        totalCustomers: customersRes.count || 0,
+        newCustomers: newCustomersRes.count || 0,
+        totalBalance,
+        totalAdded,
+        totalUsed,
+        pending,
+        approved,
+        rejected,
+        totalOrders: ordersRes.count || 0
+      })
+      setRecentOrders(recentOrdersRes.data || [])
+      setRecentFundRequests(recentFundRes.data || [])
+      setLoading(false)
+    }
+    load()
+    return () => {
+      mounted = false
+    }
+  }, [filter])
+
+  if (loading || !stats) return <Loader />
+
+  return (
+    <div>
+      <div className="row-between" style={{ marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+        <h1 style={{ fontSize: 19, margin: 0 }}>Dashboard</h1>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              className={`chip ${filter === f.key ? 'chip-gold' : ''}`}
+              style={{ cursor: 'pointer', border: 'none' }}
+              onClick={() => setFilter(f.key)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="stats-grid" style={{ marginBottom: 20 }}>
+        <Stat label="Total Customers" value={stats.totalCustomers} />
+        <Stat label="New Customers" value={stats.newCustomers} accent="text-success" />
+        <Stat label="Total Wallet Balance" value={formatCurrency(stats.totalBalance)} accent="text-gold" />
+        <Stat label="Total Funds Added" value={formatCurrency(stats.totalAdded)} accent="text-success" />
+        <Stat label="Total Funds Used" value={formatCurrency(stats.totalUsed)} />
+        <Stat label="Pending Requests" value={stats.pending} accent="text-warning" />
+        <Stat label="Approved Requests" value={stats.approved} accent="text-success" />
+        <Stat label="Rejected Requests" value={stats.rejected} accent="text-danger" />
+        <Stat label="Total Orders" value={stats.totalOrders} />
+      </div>
+
+      <div className="grid-2" style={{ gridTemplateColumns: '1fr', gap: 16 }}>
+        <div className="surface-card">
+          <div className="section-title">Recent Orders</div>
+          {recentOrders.length === 0 && <p className="text-faint" style={{ fontSize: 12.5 }}>No orders yet.</p>}
+          {recentOrders.map((o) => (
+            <div key={o.id} className="list-row" style={{ cursor: 'pointer' }} onClick={() => navigate('/admin/orders')}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{o.order_code}</div>
+                <div className="text-faint" style={{ fontSize: 11 }}>{formatDate(o.created_at)}</div>
+              </div>
+              <span className="chip chip-info">{o.status}</span>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>{formatCurrency(o.grand_total)}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="surface-card">
+          <div className="section-title">Recent Fund Requests</div>
+          {recentFundRequests.length === 0 && <p className="text-faint" style={{ fontSize: 12.5 }}>No fund requests yet.</p>}
+          {recentFundRequests.map((r) => (
+            <div key={r.id} className="list-row" style={{ cursor: 'pointer' }} onClick={() => navigate('/admin/fund-requests')}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{r.request_code}</div>
+                <div className="text-faint" style={{ fontSize: 11 }}>{formatDate(r.created_at)}</div>
+              </div>
+              <span className="chip chip-warning">{r.status}</span>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>{formatCurrency(r.amount)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Stat({ label, value, accent }) {
+  return (
+    <div className="stat-card">
+      <div className="stat-label">{label}</div>
+      <div className={`stat-value ${accent || ''}`}>{value}</div>
+    </div>
+  )
+}
