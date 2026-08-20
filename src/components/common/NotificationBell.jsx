@@ -53,7 +53,6 @@ export default function NotificationBell() {
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setOpen(false)} />
           <div
-            className="surface-card"
             style={{
               position: 'absolute',
               top: 'calc(100% + 8px)',
@@ -63,7 +62,11 @@ export default function NotificationBell() {
               maxHeight: 380,
               overflowY: 'auto',
               zIndex: 41,
-              padding: 8
+              padding: 8,
+              background: 'var(--bg-elevated, #131019)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)',
+              boxShadow: '0 12px 32px rgba(0,0,0,0.45)'
             }}
           >
             <div className="row-between" style={{ padding: '6px 6px 10px' }}>
