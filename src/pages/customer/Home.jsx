@@ -4,6 +4,7 @@ import { Search, Sparkles, LayoutGrid, Plus } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import CategoryCard from '../../components/services/CategoryCard'
 import OfferCarousel from '../../components/common/OfferCarousel'
+import CouponUnbox from '../../components/common/CouponUnbox'
 import Loader from '../../components/common/Loader'
 import EmptyState from '../../components/common/EmptyState'
 import { getIcon } from '../../utils/iconMap'
@@ -23,6 +24,7 @@ export default function Home() {
   const [services, setServices] = useState([])
   const [tiers, setTiers] = useState([])
   const [offers, setOffers] = useState([])
+  const [coupons, setCoupons] = useState([])
   const [popular, setPopular] = useState([])
   const [query, setQuery] = useState('')
   const greeting = useMemo(() => getGreeting(), [])
@@ -31,10 +33,11 @@ export default function Home() {
     let mounted = true
     async function load() {
       setLoading(true)
-      const [catRes, svcRes, offerRes] = await Promise.all([
+      const [catRes, svcRes, offerRes, couponRes] = await Promise.all([
         supabase.from('categories').select('*').eq('is_active', true).order('display_order'),
         supabase.from('services').select('*').eq('is_active', true),
-        supabase.from('offers').select('*').eq('is_active', true).order('display_order').limit(5)
+        supabase.from('offers').select('*').eq('is_active', true).order('display_order').limit(5),
+        supabase.from('coupons').select('*').eq('is_active', true).order('display_order').limit(5)
       ])
       const cats = catRes.data || []
       const svcs = svcRes.data || []
@@ -52,6 +55,7 @@ export default function Home() {
       setServices(svcs)
       setTiers(tierRows)
       setOffers(offerRes.data || [])
+      setCoupons(couponRes.data || [])
       setPopular(
         svcs
           .filter((s) => s.is_popular)
@@ -160,9 +164,15 @@ export default function Home() {
         </div>
       )}
 
+      {coupons.length > 0 && (
+        <div style={{ margin: '20px 0' }}>
+          <CouponUnbox coupons={coupons} />
+        </div>
+      )}
+
       {popular.length > 0 && (
         <>
-          <div className="section-title" style={{ marginTop: offers.length > 0 ? 0 : 20 }}>
+          <div className="section-title" style={{ marginTop: offers.length > 0 || coupons.length > 0 ? 0 : 20 }}>
             <span>
               <Sparkles size={14} style={{ verticalAlign: 'middle', marginRight: 6, color: 'var(--gold-soft)' }} />
               Popular Services

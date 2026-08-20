@@ -85,6 +85,12 @@ export default function Orders() {
                   {order.order_items?.[0]?.target_link && (
                     <p className="text-faint" style={{ fontSize: 11, wordBreak: 'break-all' }}>{order.order_items[0].target_link}</p>
                   )}
+                  {order.discount_amount > 0 && (
+                    <div className="row-between" style={{ fontSize: 12, marginTop: 8 }}>
+                      <span className="text-faint">Coupon {order.coupon_code ? `(${order.coupon_code})` : ''} Discount</span>
+                      <span className="text-success">- {formatCurrency(order.discount_amount)}</span>
+                    </div>
+                  )}
                   <div className="row-between" style={{ marginTop: 10 }}>
                     <span className="text-faint" style={{ fontSize: 12 }}>Update Status</span>
                     <select

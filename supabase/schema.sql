@@ -142,6 +142,8 @@ create table public.orders (
   category_id uuid references public.categories(id) on delete set null,
   category_name_snapshot text,
   grand_total numeric(12,2) not null,
+  coupon_code text,
+  discount_amount numeric(12,2) not null default 0,
   status text not null default 'received' check (status in ('received','processing','completed','cancelled','refunded')),
   estimated_time_text text,
   idempotency_key uuid unique,
@@ -192,6 +194,41 @@ create table public.offers (
   display_order int not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- Discount / coupon codes, fully admin-managed. Shown on the Home page
+-- as a "festive offer" the customer can copy and redeem at checkout.
+create table public.coupons (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  title text not null,
+  description text,
+  icon text not null default 'gift',
+  discount_type text not null default 'fixed' check (discount_type in ('fixed', 'percent')),
+  discount_value numeric not null check (discount_value > 0),
+  max_discount_amount numeric,
+  min_order_amount numeric not null default 0,
+  usage_limit_per_user int,
+  total_usage_limit int,
+  times_used int not null default 0,
+  is_active boolean not null default true,
+  valid_from date,
+  valid_until date,
+  display_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+-- One row per time a coupon is actually used on a real order — written
+-- only by the place_order RPC, never directly by the browser.
+create table public.coupon_redemptions (
+  id uuid primary key default gen_random_uuid(),
+  coupon_id uuid not null references public.coupons(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  order_id uuid references public.orders(id) on delete set null,
+  discount_amount numeric not null,
+  created_at timestamptz not null default now()
+);
+
+create index idx_coupon_redemptions_coupon_user on public.coupon_redemptions (coupon_id, user_id);
 
 -- Two-way Support & Smart Ticket System.
 -- One row per ticket, auto-linked to the logged-in customer. Optional
@@ -635,6 +672,24 @@ create trigger trg_offers_audit
   after insert or update or delete on public.offers
   for each row execute function public.log_offer_audit();
 
+create or replace function public.log_coupon_audit()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    perform public.write_audit_log('coupon_created','coupon', new.id::text, null, to_jsonb(new));
+  elsif tg_op = 'UPDATE' then
+    perform public.write_audit_log('coupon_updated','coupon', new.id::text, to_jsonb(old), to_jsonb(new));
+  elsif tg_op = 'DELETE' then
+    perform public.write_audit_log('coupon_deleted','coupon', old.id::text, to_jsonb(old), null);
+  end if;
+  return coalesce(new, old);
+end;
+$$;
+
+create trigger trg_coupons_audit
+  after insert or update or delete on public.coupons
+  for each row execute function public.log_coupon_audit();
+
 create or replace function public.log_payment_settings_audit()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
@@ -861,10 +916,77 @@ $$;
 
 grant execute on function public.admin_review_fund_request(uuid, text, text) to authenticated;
 
+-- Read-only coupon preview used by the checkout screen before the
+-- customer pays. Records nothing; the real, final check happens again
+-- inside place_order below so nothing can be bypassed from the browser.
+create or replace function public.validate_coupon(p_code text, p_order_amount numeric)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_user uuid := auth.uid();
+  v_coupon public.coupons%rowtype;
+  v_discount numeric;
+begin
+  if v_user is null then
+    raise exception 'You must be logged in.';
+  end if;
+  if p_code is null or length(trim(p_code)) = 0 then
+    raise exception 'Please enter a coupon code.';
+  end if;
+
+  select * into v_coupon from public.coupons where upper(code) = upper(trim(p_code));
+  if v_coupon.id is null then
+    raise exception 'Invalid coupon code.';
+  end if;
+  if not v_coupon.is_active then
+    raise exception 'This coupon is no longer active.';
+  end if;
+  if v_coupon.valid_from is not null and v_coupon.valid_from > current_date then
+    raise exception 'This coupon is not active yet.';
+  end if;
+  if v_coupon.valid_until is not null and v_coupon.valid_until < current_date then
+    raise exception 'This coupon has expired.';
+  end if;
+  if p_order_amount < v_coupon.min_order_amount then
+    raise exception 'This coupon needs a minimum order of ₹%.', v_coupon.min_order_amount;
+  end if;
+  if v_coupon.total_usage_limit is not null and v_coupon.times_used >= v_coupon.total_usage_limit then
+    raise exception 'This coupon has reached its usage limit.';
+  end if;
+  if v_coupon.usage_limit_per_user is not null then
+    if (select count(*) from public.coupon_redemptions where coupon_id = v_coupon.id and user_id = v_user) >= v_coupon.usage_limit_per_user then
+      raise exception 'You have already used this coupon.';
+    end if;
+  end if;
+
+  if v_coupon.discount_type = 'percent' then
+    v_discount := round(p_order_amount * v_coupon.discount_value / 100, 2);
+    if v_coupon.max_discount_amount is not null and v_discount > v_coupon.max_discount_amount then
+      v_discount := v_coupon.max_discount_amount;
+    end if;
+  else
+    v_discount := v_coupon.discount_value;
+  end if;
+  if v_discount > p_order_amount then
+    v_discount := p_order_amount;
+  end if;
+
+  return json_build_object(
+    'valid', true,
+    'code', v_coupon.code,
+    'title', v_coupon.title,
+    'discount_amount', v_discount,
+    'payable_total', p_order_amount - v_discount
+  );
+end;
+$$;
+
+grant execute on function public.validate_coupon(text, numeric) to authenticated;
+
 -- THE core secure checkout function. Recalculates everything server-side,
--- never trusts a price sent from the browser.
+-- never trusts a price (or a coupon discount) sent from the browser.
 -- p_items example: [{"service_id":"...", "quantity":1000, "target_link":"https://instagram.com/x"}]
-create or replace function public.place_order(p_items jsonb, p_idempotency_key uuid default null)
+create or replace function public.place_order(p_items jsonb, p_idempotency_key uuid default null, p_coupon_code text default null)
 returns json
 language plpgsql security definer set search_path = public as $$
 declare
@@ -886,6 +1008,10 @@ declare
   v_order_code text;
   v_est_time text;
   v_existing uuid;
+  v_coupon public.coupons%rowtype;
+  v_coupon_id uuid;
+  v_discount_amount numeric := 0;
+  v_payable_total numeric;
 begin
   if v_user is null then
     raise exception 'You must be logged in to place an order.';
@@ -897,7 +1023,10 @@ begin
   if p_idempotency_key is not null then
     select id into v_existing from public.orders where idempotency_key = p_idempotency_key;
     if v_existing is not null then
-      return (select json_build_object('order_id', id, 'order_code', order_code, 'grand_total', grand_total, 'already_existed', true)
+      return (select json_build_object(
+                'order_id', id, 'order_code', order_code, 'grand_total', grand_total,
+                'discount_amount', discount_amount, 'coupon_code', coupon_code,
+                'payable_total', grand_total - discount_amount, 'already_existed', true)
               from public.orders where id = v_existing);
     end if;
   end if;
@@ -965,28 +1094,84 @@ begin
     v_tier := null;
   end loop;
 
-  if v_wallet.available_fund < v_grand_total then
-    raise exception 'INSUFFICIENT_FUNDS:%', (v_grand_total - v_wallet.available_fund);
+  -- Coupon: re-validated here from scratch (never trust a discount
+  -- amount computed in the browser) using the exact same rules as
+  -- validate_coupon above.
+  if p_coupon_code is not null and length(trim(p_coupon_code)) > 0 then
+    select * into v_coupon from public.coupons where upper(code) = upper(trim(p_coupon_code));
+    if v_coupon.id is null then
+      raise exception 'Invalid coupon code.';
+    end if;
+    if not v_coupon.is_active then
+      raise exception 'This coupon is no longer active.';
+    end if;
+    if v_coupon.valid_from is not null and v_coupon.valid_from > current_date then
+      raise exception 'This coupon is not active yet.';
+    end if;
+    if v_coupon.valid_until is not null and v_coupon.valid_until < current_date then
+      raise exception 'This coupon has expired.';
+    end if;
+    if v_grand_total < v_coupon.min_order_amount then
+      raise exception 'This coupon needs a minimum order of ₹%.', v_coupon.min_order_amount;
+    end if;
+    if v_coupon.total_usage_limit is not null and v_coupon.times_used >= v_coupon.total_usage_limit then
+      raise exception 'This coupon has reached its usage limit.';
+    end if;
+    if v_coupon.usage_limit_per_user is not null then
+      if (select count(*) from public.coupon_redemptions where coupon_id = v_coupon.id and user_id = v_user) >= v_coupon.usage_limit_per_user then
+        raise exception 'You have already used this coupon.';
+      end if;
+    end if;
+
+    if v_coupon.discount_type = 'percent' then
+      v_discount_amount := round(v_grand_total * v_coupon.discount_value / 100, 2);
+      if v_coupon.max_discount_amount is not null and v_discount_amount > v_coupon.max_discount_amount then
+        v_discount_amount := v_coupon.max_discount_amount;
+      end if;
+    else
+      v_discount_amount := v_coupon.discount_value;
+    end if;
+    if v_discount_amount > v_grand_total then
+      v_discount_amount := v_grand_total;
+    end if;
+
+    v_coupon_id := v_coupon.id;
+  end if;
+
+  v_payable_total := v_grand_total - v_discount_amount;
+
+  if v_wallet.available_fund < v_payable_total then
+    raise exception 'INSUFFICIENT_FUNDS:%', (v_payable_total - v_wallet.available_fund);
   end if;
 
   v_before := v_wallet.available_fund;
-  v_after := v_before - v_grand_total;
+  v_after := v_before - v_payable_total;
 
   update public.wallets
-  set available_fund = v_after, total_fund_used = total_fund_used + v_grand_total, updated_at = now()
+  set available_fund = v_after, total_fund_used = total_fund_used + v_payable_total, updated_at = now()
   where id = v_wallet.id;
 
   v_order_code := public.generate_code('BHD');
 
-  insert into public.orders(order_code, user_id, category_id, category_name_snapshot, grand_total, status, estimated_time_text, idempotency_key)
-  values (v_order_code, v_user, v_category_id, v_category_name, v_grand_total, 'received', v_est_time, p_idempotency_key)
+  insert into public.orders(order_code, user_id, category_id, category_name_snapshot, grand_total, discount_amount, coupon_code, status, estimated_time_text, idempotency_key)
+  values (v_order_code, v_user, v_category_id, v_category_name, v_grand_total, v_discount_amount, case when v_coupon_id is not null then v_coupon.code else null end, 'received', v_est_time, p_idempotency_key)
   returning id into v_order_id;
 
   insert into public.order_items(order_id, service_id, service_name_snapshot, target_link, quantity, applied_rate, item_total)
   select v_order_id, service_id, service_name, target_link, quantity, applied_rate, item_total from tmp_order_items;
 
   insert into public.wallet_transactions(wallet_id, user_id, type, amount, balance_before, balance_after, status, remark, related_order_id)
-  values (v_wallet.id, v_user, 'fund_used', v_grand_total, v_before, v_after, 'completed', 'Order ' || v_order_code, v_order_id);
+  values (
+    v_wallet.id, v_user, 'fund_used', v_payable_total, v_before, v_after, 'completed',
+    'Order ' || v_order_code || case when v_coupon_id is not null then ' (coupon ' || v_coupon.code || ' applied)' else '' end,
+    v_order_id
+  );
+
+  if v_coupon_id is not null then
+    insert into public.coupon_redemptions(coupon_id, user_id, order_id, discount_amount)
+    values (v_coupon_id, v_user, v_order_id, v_discount_amount);
+    update public.coupons set times_used = times_used + 1 where id = v_coupon_id;
+  end if;
 
   insert into public.notifications(user_id, title, message, type, related_id)
   values (v_user, 'Order Placed', 'Your order ' || v_order_code || ' has been received.', 'order', v_order_id);
@@ -995,13 +1180,16 @@ begin
     'order_id', v_order_id,
     'order_code', v_order_code,
     'grand_total', v_grand_total,
+    'discount_amount', v_discount_amount,
+    'coupon_code', case when v_coupon_id is not null then v_coupon.code else null end,
+    'payable_total', v_payable_total,
     'remaining_balance', v_after,
     'estimated_time_text', v_est_time
   );
 end;
 $$;
 
-grant execute on function public.place_order(jsonb, uuid) to authenticated;
+grant execute on function public.place_order(jsonb, uuid, text) to authenticated;
 
 -- Authorized admin manually adds / deducts / sets a customer's balance.
 create or replace function public.admin_adjust_wallet(p_user_id uuid, p_action text, p_amount numeric, p_reason text)
@@ -1409,6 +1597,8 @@ alter table public.fund_request_receipts enable row level security;
 alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
 alter table public.offers enable row level security;
+alter table public.coupons enable row level security;
+alter table public.coupon_redemptions enable row level security;
 alter table public.support_tickets enable row level security;
 alter table public.support_messages enable row level security;
 alter table public.notifications enable row level security;
@@ -1530,6 +1720,27 @@ create policy "offers_update" on public.offers
 
 create policy "offers_delete" on public.offers
   for delete using (public.has_permission('manage_offers'));
+
+-- ---------------- coupons / coupon_redemptions ----------------
+create policy "coupons_select" on public.coupons
+  for select using (
+    (is_active = true and (valid_from is null or valid_from <= current_date) and (valid_until is null or valid_until >= current_date))
+    or public.is_admin()
+  );
+
+create policy "coupons_insert" on public.coupons
+  for insert with check (public.has_permission('manage_coupons'));
+
+create policy "coupons_update" on public.coupons
+  for update using (public.has_permission('manage_coupons')) with check (public.has_permission('manage_coupons'));
+
+create policy "coupons_delete" on public.coupons
+  for delete using (public.has_permission('manage_coupons'));
+
+-- No direct INSERT/UPDATE policies on coupon_redemptions - every row is
+-- written by the place_order RPC only.
+create policy "coupon_redemptions_select" on public.coupon_redemptions
+  for select using (user_id = auth.uid() or public.is_admin());
 
 -- ---------------- support_tickets / support_messages ----------------
 -- No direct INSERT/UPDATE policies on purpose - every write goes through

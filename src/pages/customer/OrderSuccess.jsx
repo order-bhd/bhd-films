@@ -23,9 +23,21 @@ export default function OrderSuccess() {
           <span className="text-faint">Order ID</span>
           <span style={{ fontWeight: 800 }}>{data.order_code}</span>
         </div>
+        {data.discount_amount > 0 && (
+          <>
+            <div className="row-between" style={{ marginBottom: 10 }}>
+              <span className="text-faint">Order Subtotal</span>
+              <span>{formatCurrency(data.grand_total)}</span>
+            </div>
+            <div className="row-between" style={{ marginBottom: 10 }}>
+              <span className="text-faint">Coupon Discount {data.coupon_code ? `(${data.coupon_code})` : ''}</span>
+              <span className="text-success" style={{ fontWeight: 700 }}>- {formatCurrency(data.discount_amount)}</span>
+            </div>
+          </>
+        )}
         <div className="row-between" style={{ marginBottom: 10 }}>
           <span className="text-faint">Amount Deducted</span>
-          <span style={{ fontWeight: 700 }}>{formatCurrency(data.grand_total)}</span>
+          <span style={{ fontWeight: 700 }}>{formatCurrency(data.payable_total ?? data.grand_total)}</span>
         </div>
         <div className="row-between">
           <span className="text-faint">Remaining Wallet Balance</span>

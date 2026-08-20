@@ -85,9 +85,15 @@ export default function OrderHistory() {
                     </div>
                   ))}
                   <div className="divider" />
+                  {order.discount_amount > 0 && (
+                    <div className="row-between" style={{ fontSize: 12.5, marginBottom: 6 }}>
+                      <span className="text-faint">Coupon Discount {order.coupon_code ? `(${order.coupon_code})` : ''}</span>
+                      <span className="text-success">- {formatCurrency(order.discount_amount)}</span>
+                    </div>
+                  )}
                   <div className="row-between" style={{ fontWeight: 800 }}>
-                    <span>Grand Total</span>
-                    <span className="text-gold">{formatCurrency(order.grand_total)}</span>
+                    <span>{order.discount_amount > 0 ? 'Amount Paid' : 'Grand Total'}</span>
+                    <span className="text-gold">{formatCurrency(order.grand_total - (order.discount_amount || 0))}</span>
                   </div>
                   {order.estimated_time_text && (
                     <p className="text-faint" style={{ fontSize: 11, marginTop: 8 }}>

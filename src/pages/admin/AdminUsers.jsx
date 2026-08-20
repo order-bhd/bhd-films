@@ -10,6 +10,7 @@ const STAFF_PERMS = [
   'manage_orders',
   'manage_fund_requests',
   'manage_offers',
+  'manage_coupons',
   'manage_support',
   'view_customers',
   'view_audit_log'

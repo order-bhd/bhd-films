@@ -39,6 +39,7 @@ import AdminFundRequests from './pages/admin/FundRequests'
 import WalletTransactions from './pages/admin/WalletTransactions'
 import PaymentSettings from './pages/admin/PaymentSettings'
 import AdminOffers from './pages/admin/Offers'
+import Coupons from './pages/admin/Coupons'
 import SupportMessages from './pages/admin/SupportMessages'
 import Reports from './pages/admin/Reports'
 import AuditLog from './pages/admin/AuditLog'
@@ -174,6 +175,7 @@ export default function App() {
             <Route path="wallet-transactions" element={<WalletTransactions />} />
             <Route path="payment-settings" element={<PaymentSettings />} />
             <Route path="offers" element={<AdminOffers />} />
+            <Route path="coupons" element={<Coupons />} />
             <Route path="support" element={<SupportMessages />} />
             <Route path="reports" element={<Reports />} />
             <Route path="audit-log" element={<AuditLog />} />

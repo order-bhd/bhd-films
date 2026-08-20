@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useLocation } from 'react-router-dom'
-import { Wallet as WalletIcon, ShieldCheck } from 'lucide-react'
+import { Wallet as WalletIcon, ShieldCheck, Tag, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useWallet } from '../../hooks/useWallet'
@@ -30,6 +30,11 @@ export default function CategoryOrder() {
   const [submitError, setSubmitError] = useState('')
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
   const [showErrors, setShowErrors] = useState(false)
+
+  const [couponInput, setCouponInput] = useState('')
+  const [appliedCoupon, setAppliedCoupon] = useState(null) // { code, title, discount_amount, payable_total, forAmount }
+  const [couponChecking, setCouponChecking] = useState(false)
+  const [couponError, setCouponError] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -102,6 +107,45 @@ export default function CategoryOrder() {
   const grandTotal = lineItems.reduce((sum, item) => sum + item.total, 0)
   const hasSelection = lineItems.length > 0
 
+  // A coupon's discount was computed against the order total at the
+  // moment it was applied. If the customer changes quantities afterward,
+  // that discount is stale — drop it rather than silently keep charging
+  // the old (possibly wrong) discounted amount.
+  useEffect(() => {
+    if (appliedCoupon && appliedCoupon.forAmount !== grandTotal) {
+      setAppliedCoupon(null)
+      setCouponError('Your order changed — please re-apply the coupon.')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grandTotal])
+
+  const payableTotal = appliedCoupon ? appliedCoupon.payable_total : grandTotal
+
+  async function handleApplyCoupon() {
+    setCouponError('')
+    if (!couponInput.trim()) {
+      setCouponError('Please enter a coupon code.')
+      return
+    }
+    setCouponChecking(true)
+    const { data, error: err } = await supabase.rpc('validate_coupon', {
+      p_code: couponInput.trim(),
+      p_order_amount: grandTotal
+    })
+    setCouponChecking(false)
+    if (err) {
+      setCouponError(err.message || 'Could not apply this coupon.')
+      return
+    }
+    setAppliedCoupon({ ...data, forAmount: grandTotal })
+    setCouponInput('')
+  }
+
+  function handleRemoveCoupon() {
+    setAppliedCoupon(null)
+    setCouponError('')
+  }
+
   function validateAll() {
     for (const item of lineItems) {
       const qtyErr = validateQuantity(item.service, item.quantity)
@@ -132,9 +176,9 @@ export default function CategoryOrder() {
       setSubmitError(validationError)
       return
     }
-    if (wallet && grandTotal > wallet.available_fund) {
+    if (wallet && payableTotal > wallet.available_fund) {
       setSubmitError(
-        `Insufficient wallet balance. Please add ${formatCurrency(grandTotal - wallet.available_fund)} or more to continue.`
+        `Insufficient wallet balance. Please add ${formatCurrency(payableTotal - wallet.available_fund)} or more to continue.`
       )
       return
     }
@@ -149,7 +193,8 @@ export default function CategoryOrder() {
 
       const { data, error } = await supabase.rpc('place_order', {
         p_items: payload,
-        p_idempotency_key: idempotencyKey
+        p_idempotency_key: idempotencyKey,
+        p_coupon_code: appliedCoupon?.code || null
       })
 
       if (error) {
@@ -255,15 +300,65 @@ export default function CategoryOrder() {
               <div className="divider" />
               <div className="row-between" style={{ fontSize: 15, fontWeight: 800 }}>
                 <span>Grand Total</span>
-                <span className="text-gold">{formatCurrency(grandTotal)}</span>
+                <span className={appliedCoupon ? 'text-faint' : 'text-gold'} style={appliedCoupon ? { textDecoration: 'line-through', fontWeight: 600 } : undefined}>
+                  {formatCurrency(grandTotal)}
+                </span>
               </div>
+
+              {isLoggedIn && (
+                <div style={{ marginTop: 10 }}>
+                  {appliedCoupon ? (
+                    <div className="row-between" style={{ fontSize: 12.5, background: 'rgba(46,204,113,0.08)', border: '1px solid rgba(46,204,113,0.25)', borderRadius: 10, padding: '8px 10px' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Tag size={13} className="text-success" />
+                        <span className="text-success" style={{ fontWeight: 700 }}>{appliedCoupon.code}</span> applied
+                      </span>
+                      <button type="button" className="icon-btn" style={{ width: 24, height: 24 }} onClick={handleRemoveCoupon} aria-label="Remove coupon">
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        value={couponInput}
+                        onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                        placeholder="Have a coupon code?"
+                        style={{ flex: 1, textTransform: 'uppercase' }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ width: 'auto', flexShrink: 0, padding: '10px 16px' }}
+                        onClick={handleApplyCoupon}
+                        disabled={couponChecking}
+                      >
+                        {couponChecking ? 'Checking…' : 'Apply'}
+                      </button>
+                    </div>
+                  )}
+                  {couponError && <div className="field-error" style={{ marginTop: 6 }}>{couponError}</div>}
+                </div>
+              )}
+
+              {appliedCoupon && (
+                <>
+                  <div className="row-between" style={{ fontSize: 13, marginTop: 10 }}>
+                    <span className="text-faint">Coupon Discount</span>
+                    <span className="text-success" style={{ fontWeight: 700 }}>- {formatCurrency(appliedCoupon.discount_amount)}</span>
+                  </div>
+                  <div className="row-between" style={{ fontSize: 15, fontWeight: 800, marginTop: 6 }}>
+                    <span>Payable Amount</span>
+                    <span className="text-gold">{formatCurrency(payableTotal)}</span>
+                  </div>
+                </>
+              )}
 
               {isLoggedIn && wallet && (
                 <div className="row-between" style={{ fontSize: 12, marginTop: 8 }}>
                   <span className="text-faint" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                     <WalletIcon size={13} /> Available Fund
                   </span>
-                  <span className={grandTotal > wallet.available_fund ? 'text-danger' : 'text-success'}>
+                  <span className={payableTotal > wallet.available_fund ? 'text-danger' : 'text-success'}>
                     {formatCurrency(wallet.available_fund)}
                   </span>
                 </div>
@@ -277,7 +372,7 @@ export default function CategoryOrder() {
                 </button>
               ) : (
                 <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={handlePayNow} disabled={submitting}>
-                  <ShieldCheck size={16} /> {submitting ? 'Processing…' : `Pay Now · ${formatCurrency(grandTotal)}`}
+                  <ShieldCheck size={16} /> {submitting ? 'Processing…' : `Pay Now · ${formatCurrency(payableTotal)}`}
                 </button>
               )}
             </div>
