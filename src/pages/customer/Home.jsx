@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Search, Sparkles, LayoutGrid, Plus } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import CategoryCard from '../../components/services/CategoryCard'
-import PromoBanner from '../../components/common/GradientBanner'
+import OfferCarousel from '../../components/common/OfferCarousel'
 import Loader from '../../components/common/Loader'
 import EmptyState from '../../components/common/EmptyState'
 import { getIcon } from '../../utils/iconMap'
@@ -156,12 +156,7 @@ export default function Home() {
 
       {offers.length > 0 && (
         <div style={{ margin: '20px 0' }}>
-          <PromoBanner
-            title={offers[0].title}
-            description={offers[0].description}
-            icon={offers[0].icon}
-            gradient={offers[0].gradient}
-          />
+          <OfferCarousel offers={offers} />
         </div>
       )}
 
