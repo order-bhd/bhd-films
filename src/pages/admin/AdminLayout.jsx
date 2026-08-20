@@ -32,7 +32,7 @@ const NAV = [
   { to: '/admin/services', label: 'Services', icon: Boxes, perm: 'manage_services' },
   { to: '/admin/rate-control', label: 'Rate Control', icon: Percent, perm: 'manage_rates' },
   { to: '/admin/bulk-pricing', label: 'Bulk Pricing', icon: Layers, perm: 'manage_bulk_pricing' },
-  { to: '/admin/orders', label: 'Orders', icon: ShoppingBag, perm: 'manage_orders' },
+  { to: '/admin/orders', label: 'Orders', icon: ShoppingBag, perm: 'manage_orders', unreadKey: 'orders' },
   { to: '/admin/fund-requests', label: 'Fund Requests', icon: Banknote, perm: 'manage_fund_requests' },
   { to: '/admin/wallet-transactions', label: 'Wallet Transactions', icon: History, perm: 'manage_wallets' },
   { to: '/admin/payment-settings', label: 'Payment Settings', icon: QrCode, perm: 'manage_payment_settings' },
@@ -49,6 +49,7 @@ export default function AdminLayout() {
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [unreadSupport, setUnreadSupport] = useState(0)
+  const [unreadOrders, setUnreadOrders] = useState(0)
 
   useEffect(() => {
     async function loadUnread() {
@@ -68,6 +69,27 @@ export default function AdminLayout() {
     }
   }, [])
 
+  // New orders badge — counts orders still sitting at "received" (just
+  // paid, not yet picked up by an admin). Once an admin moves the status
+  // forward (processing/completed/etc.) it drops off this count.
+  useEffect(() => {
+    async function loadNewOrders() {
+      const { count } = await supabase
+        .from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'received')
+      setUnreadOrders(count || 0)
+    }
+    loadNewOrders()
+    const channel = supabase
+      .channel('admin-orders-unread-badge')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, loadNewOrders)
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
+
   function allowed(perm) {
     if (!perm) return true
     if (adminRole === 'super_admin') return true
@@ -79,35 +101,40 @@ export default function AdminLayout() {
 
   const visibleNav = NAV.filter((item) => allowed(item.perm))
 
+  const badgeCounts = { support: unreadSupport, orders: unreadOrders }
+
   const linkList = (
     <>
-      {visibleNav.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.end}
-          className={({ isActive }) => `admin-nav-link${isActive ? ' active' : ''}`}
-          onClick={() => setMobileOpen(false)}
-        >
-          <item.icon size={16} />
-          {item.label}
-          {item.unreadKey === 'support' && unreadSupport > 0 && (
-            <span
-              style={{
-                marginLeft: 'auto',
-                background: 'var(--crimson, #e0435a)',
-                color: '#fff',
-                fontSize: 10,
-                fontWeight: 800,
-                borderRadius: 8,
-                padding: '1px 6px'
-              }}
-            >
-              {unreadSupport}
-            </span>
-          )}
-        </NavLink>
-      ))}
+      {visibleNav.map((item) => {
+        const badgeCount = badgeCounts[item.unreadKey] || 0
+        return (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            className={({ isActive }) => `admin-nav-link${isActive ? ' active' : ''}`}
+            onClick={() => setMobileOpen(false)}
+          >
+            <item.icon size={16} />
+            {item.label}
+            {badgeCount > 0 && (
+              <span
+                style={{
+                  marginLeft: 'auto',
+                  background: 'var(--crimson, #e0435a)',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 800,
+                  borderRadius: 8,
+                  padding: '1px 6px'
+                }}
+              >
+                {badgeCount}
+              </span>
+            )}
+          </NavLink>
+        )
+      })}
     </>
   )
 
