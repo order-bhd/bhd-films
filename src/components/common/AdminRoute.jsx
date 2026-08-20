@@ -2,41 +2,23 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import Loader from './Loader'
 
-// Protects every /admin/* page
+// Wraps every /admin/* page. Frontend gating is only a convenience -
+// the REAL enforcement happens in Postgres RLS + has_permission(), so
+// even if someone bypasses this component they still can't read/write
+// anything they're not allowed to.
 export default function AdminRoute({ children, permission }) {
   const { isLoggedIn, isAdmin, adminRole, loading } = useAuth()
 
-  // Check manual Super Admin login
-  const isManualSuperAdmin =
-    sessionStorage.getItem('bhd_superadmin') === 'true'
-
-  // Manual Super Admin gets immediate full access
-  if (isManualSuperAdmin) {
-    return children
-  }
-
-  // Wait only for normal Supabase authentication
   if (loading) return <Loader />
-
-  // Normal Supabase Admin check
   if (!isLoggedIn || !isAdmin) {
     return <Navigate to="/admin/login" replace />
   }
-
-  // Staff restrictions
   if (permission && adminRole === 'staff') {
-    const restricted = [
-      'manage_wallets',
-      'manage_rates',
-      'manage_bulk_pricing',
-      'manage_payment_settings',
-      'manage_admins'
-    ]
-
+    // Staff-only soft check for nicer UX; DB still enforces the real rule.
+    const restricted = ['manage_wallets', 'manage_rates', 'manage_bulk_pricing', 'manage_payment_settings', 'manage_admins']
     if (restricted.includes(permission)) {
       return <Navigate to="/admin" replace />
     }
   }
-
   return children
 }

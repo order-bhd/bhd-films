@@ -46,46 +46,13 @@ export default function AdminLayout() {
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
 
-  // Check manual Super Admin login
-  const isSuperAdmin =
-    sessionStorage.getItem('bhd_superadmin') === 'true'
-
-  // Manual login gets full Super Admin access
-  const currentRole = isSuperAdmin ? 'super_admin' : adminRole
-
   function allowed(perm) {
     if (!perm) return true
-
-    // Super Admin gets everything
-    if (currentRole === 'super_admin') return true
-
-    if (currentRole === 'admin') {
-      return perm !== 'manage_admins'
-    }
-
-    const restricted = [
-      'manage_wallets',
-      'manage_rates',
-      'manage_bulk_pricing',
-      'manage_payment_settings',
-      'manage_admins'
-    ]
-
+    if (adminRole === 'super_admin') return true
+    if (adminRole === 'admin') return perm !== 'manage_admins'
+    const restricted = ['manage_wallets', 'manage_rates', 'manage_bulk_pricing', 'manage_payment_settings', 'manage_admins']
     if (restricted.includes(perm)) return false
-
     return !!adminPermissions?.[perm]
-  }
-
-  function handleLogout() {
-    // Remove manual Super Admin session
-    sessionStorage.removeItem('bhd_superadmin')
-
-    // Sign out normal authentication if present
-    Promise.resolve(signOut())
-      .catch(() => {})
-      .finally(() => {
-        navigate('/admin/login', { replace: true })
-      })
   }
 
   const visibleNav = NAV.filter((item) => allowed(item.perm))
@@ -97,9 +64,7 @@ export default function AdminLayout() {
           key={item.to}
           to={item.to}
           end={item.end}
-          className={({ isActive }) =>
-            `admin-nav-link${isActive ? ' active' : ''}`
-          }
+          className={({ isActive }) => `admin-nav-link${isActive ? ' active' : ''}`}
           onClick={() => setMobileOpen(false)}
         >
           <item.icon size={16} />
@@ -112,56 +77,26 @@ export default function AdminLayout() {
   return (
     <div className="admin-shell">
       <div className="admin-topbar">
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontWeight: 800
-          }}
-        >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800 }}>
           <Clapperboard size={18} /> BHD Films Admin
         </div>
-
-        <button
-          className="icon-btn"
-          onClick={() => setMobileOpen(true)}
-        >
+        <button className="icon-btn" onClick={() => setMobileOpen(true)}>
           <Menu size={18} />
         </button>
       </div>
 
       {mobileOpen && (
-        <div
-          className="modal-backdrop"
-          onClick={() => setMobileOpen(false)}
-        >
-          <div
-            className="modal-sheet"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className="row-between"
-              style={{ marginBottom: 14 }}
-            >
+        <div className="modal-backdrop" onClick={() => setMobileOpen(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="row-between" style={{ marginBottom: 14 }}>
               <strong>Menu</strong>
-
-              <button
-                className="icon-btn"
-                onClick={() => setMobileOpen(false)}
-              >
+              <button className="icon-btn" onClick={() => setMobileOpen(false)}>
                 <X size={16} />
               </button>
             </div>
-
             {linkList}
-
             <div className="divider" />
-
-            <button
-              className="btn btn-secondary"
-              onClick={handleLogout}
-            >
+            <button className="btn btn-secondary" onClick={() => signOut().then(() => navigate('/admin/login'))}>
               <LogOut size={16} /> Logout
             </button>
           </div>
@@ -169,43 +104,15 @@ export default function AdminLayout() {
       )}
 
       <aside className="admin-sidebar">
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontWeight: 800,
-            padding: '6px 10px 18px'
-          }}
-        >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, padding: '6px 10px 18px' }}>
           <Clapperboard size={18} /> BHD Films
         </div>
-
         {linkList}
-
         <div className="divider" />
-
-        <button
-          className="admin-nav-link"
-          style={{
-            width: '100%',
-            background: 'none',
-            border: 'none'
-          }}
-          onClick={handleLogout}
-        >
+        <button className="admin-nav-link" style={{ width: '100%', background: 'none', border: 'none' }} onClick={() => signOut().then(() => navigate('/admin/login'))}>
           <LogOut size={16} /> Logout
         </button>
-
-        <p
-          className="text-faint"
-          style={{
-            fontSize: 10.5,
-            padding: '10px 12px 0'
-          }}
-        >
-          Role: {currentRole}
-        </p>
+        <p className="text-faint" style={{ fontSize: 10.5, padding: '10px 12px 0' }}>Role: {adminRole}</p>
       </aside>
 
       <main className="admin-main">
