@@ -1039,7 +1039,7 @@ begin
   create temporary table if not exists tmp_order_items (
     service_id uuid, service_name text, target_link text, quantity int, applied_rate numeric, item_total numeric
   ) on commit drop;
-  delete from tmp_order_items;
+  delete from tmp_order_items where true;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
     select * into v_service from public.services where id = (v_item->>'service_id')::uuid and is_active = true;

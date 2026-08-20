@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Check } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import Loader from '../../components/common/Loader'
 import { formatCurrency, formatDate } from '../../utils/format'
@@ -12,6 +12,13 @@ export default function Orders() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [expanded, setExpanded] = useState(null)
   const [updating, setUpdating] = useState(null)
+  const [copiedId, setCopiedId] = useState(null)
+
+  function copyLink(url, orderId) {
+    navigator.clipboard?.writeText(url)
+    setCopiedId(orderId)
+    setTimeout(() => setCopiedId((id) => (id === orderId ? null : id)), 1500)
+  }
 
   async function load() {
     setLoading(true)
@@ -83,7 +90,20 @@ export default function Orders() {
                     </div>
                   ))}
                   {order.order_items?.[0]?.target_link && (
-                    <p className="text-faint" style={{ fontSize: 11, wordBreak: 'break-all' }}>{order.order_items[0].target_link}</p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                      <p className="text-faint" style={{ fontSize: 11, wordBreak: 'break-all', margin: 0, flex: 1 }}>
+                        {order.order_items[0].target_link}
+                      </p>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        style={{ width: 26, height: 26, flexShrink: 0 }}
+                        onClick={() => copyLink(order.order_items[0].target_link, order.id)}
+                        aria-label="Copy link"
+                      >
+                        {copiedId === order.id ? <Check size={12} /> : <Copy size={12} />}
+                      </button>
+                    </div>
                   )}
                   {order.discount_amount > 0 && (
                     <div className="row-between" style={{ fontSize: 12, marginTop: 8 }}>
