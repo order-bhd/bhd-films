@@ -19,6 +19,8 @@ import PaymentQR from './pages/customer/PaymentQR'
 import FundRequests from './pages/customer/FundRequests'
 import FundHistory from './pages/customer/FundHistory'
 import Support from './pages/customer/Support'
+import NewSupportTicket from './pages/customer/NewSupportTicket'
+import SupportTicketDetail from './pages/customer/SupportTicketDetail'
 import About from './pages/customer/About'
 import Login from './pages/customer/Login'
 import OrderSuccess from './pages/customer/OrderSuccess'
@@ -54,7 +56,30 @@ export default function App() {
             <Route path="/services" element={<Services />} />
             <Route path="/services/:slug" element={<CategoryOrder />} />
             <Route path="/offers" element={<Offers />} />
-            <Route path="/support" element={<Support />} />
+            <Route
+              path="/support"
+              element={
+                <ProtectedRoute>
+                  <Support />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/support/new"
+              element={
+                <ProtectedRoute>
+                  <NewSupportTicket />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/support/:id"
+              element={
+                <ProtectedRoute>
+                  <SupportTicketDetail />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/about" element={<About />} />
             <Route
               path="/orders"

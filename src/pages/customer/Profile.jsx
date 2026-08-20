@@ -37,6 +37,7 @@ export default function Profile() {
   const [editing, setEditing] = useState(false)
   const [fullName, setFullName] = useState(profile?.full_name || '')
   const [username, setUsername] = useState(profile?.username || '')
+  const [phone, setPhone] = useState(profile?.phone || '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -45,7 +46,7 @@ export default function Profile() {
     setError('')
     const { error: err } = await supabase
       .from('profiles')
-      .update({ full_name: fullName.trim(), username: username.trim() })
+      .update({ full_name: fullName.trim(), username: username.trim(), phone: phone.trim() || null })
       .eq('id', user.id)
     setSaving(false)
     if (err) {
@@ -66,13 +67,15 @@ export default function Profile() {
           {editing ? (
             <>
               <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Full name" style={{ marginBottom: 6 }} />
-              <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" />
+              <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" style={{ marginBottom: 6 }} />
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Mobile number (optional)" />
             </>
           ) : (
             <>
               <div style={{ fontWeight: 800, fontSize: 15 }}>{profile?.full_name || 'Add your name'}</div>
               <div className="text-faint" style={{ fontSize: 12 }}>@{profile?.username}</div>
               <div className="text-faint" style={{ fontSize: 11.5 }}>{profile?.email}</div>
+              <div className="text-faint" style={{ fontSize: 11.5 }}>{profile?.phone || 'No mobile number on file'}</div>
             </>
           )}
         </div>

@@ -23,6 +23,7 @@ create table public.profiles (
   username text unique,
   full_name text,
   email text,
+  phone text,
   account_status text not null default 'active' check (account_status in ('active','suspended')),
   created_at timestamptz not null default now(),
   last_activity_at timestamptz not null default now()
@@ -192,18 +193,46 @@ create table public.offers (
   created_at timestamptz not null default now()
 );
 
--- Support / contact form submissions.
+-- Two-way Support & Smart Ticket System.
+-- One row per ticket, auto-linked to the logged-in customer. Optional
+-- links to an existing order / wallet transaction / fund request let the
+-- app auto-fetch that record's details instead of asking the customer to
+-- re-type anything (no snapshot columns needed here on purpose - the
+-- admin/customer UI joins the live order/wallet/fund_request row).
+create table public.support_tickets (
+  id uuid primary key default gen_random_uuid(),
+  ticket_code text not null unique,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  category text not null check (category in ('technical','payment','order','wallet','dropped','failed_transaction','receipt','other')),
+  sub_category text,
+  subject text not null,
+  order_id uuid references public.orders(id) on delete set null,
+  wallet_transaction_id uuid references public.wallet_transactions(id) on delete set null,
+  fund_request_id uuid references public.fund_requests(id) on delete set null,
+  transaction_ref text,
+  payment_date date,
+  amount numeric(12,2),
+  failure_message text,
+  occurred_location text,
+  status text not null default 'open' check (status in ('open','in_progress','waiting_customer','resolved','closed')),
+  has_unread_admin_reply boolean not null default false,
+  has_unread_customer_message boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  last_message_at timestamptz not null default now()
+);
+
+-- The full conversation thread for a ticket (customer + admin messages,
+-- in order). is_read means "read by the OTHER party".
 create table public.support_messages (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid references public.profiles(id) on delete set null,
-  name text not null,
-  email text not null,
-  subject text not null,
+  ticket_id uuid not null references public.support_tickets(id) on delete cascade,
+  sender_type text not null check (sender_type in ('customer','admin')),
+  sender_id uuid references auth.users(id),
   message text not null,
-  status text not null default 'open' check (status in ('open','responded','closed')),
-  admin_remark text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  attachment_url text,
+  is_read boolean not null default false,
+  created_at timestamptz not null default now()
 );
 
 -- Lightweight in-app notifications.
@@ -296,7 +325,11 @@ create index idx_orders_status on public.orders (status);
 create index idx_order_items_order on public.order_items (order_id);
 create index idx_notifications_user on public.notifications (user_id, is_read);
 create index idx_audit_logs_created on public.audit_logs (created_at desc);
-create index idx_support_user on public.support_messages (user_id);
+create index idx_support_tickets_user on public.support_tickets (user_id, created_at desc);
+create index idx_support_tickets_status on public.support_tickets (status);
+create index idx_support_tickets_order on public.support_tickets (order_id);
+create index idx_support_tickets_unread_admin on public.support_tickets (has_unread_customer_message) where has_unread_customer_message = true;
+create index idx_support_messages_ticket on public.support_messages (ticket_id, created_at);
 create index idx_push_subs_user on public.push_subscriptions (user_id);
 
 -- =====================================================================
@@ -447,7 +480,7 @@ create trigger trg_services_updated before update on public.services for each ro
 create trigger trg_wallets_updated before update on public.wallets for each row execute function public.set_updated_at();
 create trigger trg_orders_updated before update on public.orders for each row execute function public.set_updated_at();
 create trigger trg_fund_requests_updated before update on public.fund_requests for each row execute function public.set_updated_at();
-create trigger trg_support_updated before update on public.support_messages for each row execute function public.set_updated_at();
+create trigger trg_support_tickets_updated before update on public.support_tickets for each row execute function public.set_updated_at();
 create trigger trg_payment_settings_updated before update on public.payment_settings for each row execute function public.set_updated_at();
 create trigger trg_payment_qr_codes_updated before update on public.payment_qr_codes for each row execute function public.set_updated_at();
 
@@ -1057,26 +1090,197 @@ $$;
 
 grant execute on function public.admin_update_order_status(uuid, text) to authenticated;
 
--- Admin submits a customer support reply / status change.
-create or replace function public.admin_update_support_message(p_message_id uuid, p_status text, p_remark text)
+-- Customer creates a new support ticket + its first message. Any
+-- order/wallet-transaction/fund-request the customer selected is
+-- verified to actually belong to them, server-side.
+create or replace function public.create_support_ticket(
+  p_category text,
+  p_subject text,
+  p_message text,
+  p_sub_category text default null,
+  p_order_id uuid default null,
+  p_wallet_transaction_id uuid default null,
+  p_fund_request_id uuid default null,
+  p_transaction_ref text default null,
+  p_payment_date date default null,
+  p_amount numeric default null,
+  p_failure_message text default null,
+  p_occurred_location text default null,
+  p_attachment_url text default null
+) returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_user uuid := auth.uid();
+  v_ticket_id uuid;
+  v_code text;
+begin
+  if v_user is null then
+    raise exception 'You must be logged in.';
+  end if;
+  if p_category not in ('technical','payment','order','wallet','dropped','failed_transaction','receipt','other') then
+    raise exception 'Invalid issue category.';
+  end if;
+  if p_subject is null or length(trim(p_subject)) = 0 then
+    raise exception 'A subject is required.';
+  end if;
+  if p_message is null or length(trim(p_message)) = 0 then
+    raise exception 'Please describe the issue.';
+  end if;
+
+  if p_order_id is not null and not exists (select 1 from public.orders where id = p_order_id and user_id = v_user) then
+    raise exception 'That order was not found on your account.';
+  end if;
+  if p_wallet_transaction_id is not null and not exists (select 1 from public.wallet_transactions where id = p_wallet_transaction_id and user_id = v_user) then
+    raise exception 'That wallet transaction was not found on your account.';
+  end if;
+  if p_fund_request_id is not null and not exists (select 1 from public.fund_requests where id = p_fund_request_id and user_id = v_user) then
+    raise exception 'That fund request was not found on your account.';
+  end if;
+
+  v_code := public.generate_code('TK');
+
+  insert into public.support_tickets (
+    ticket_code, user_id, category, sub_category, subject,
+    order_id, wallet_transaction_id, fund_request_id,
+    transaction_ref, payment_date, amount, failure_message, occurred_location,
+    has_unread_customer_message
+  ) values (
+    v_code, v_user, p_category, nullif(trim(coalesce(p_sub_category, '')), ''), trim(p_subject),
+    p_order_id, p_wallet_transaction_id, p_fund_request_id,
+    nullif(trim(coalesce(p_transaction_ref, '')), ''), p_payment_date, p_amount,
+    nullif(trim(coalesce(p_failure_message, '')), ''), nullif(trim(coalesce(p_occurred_location, '')), ''),
+    true
+  ) returning id into v_ticket_id;
+
+  insert into public.support_messages (ticket_id, sender_type, sender_id, message, attachment_url, is_read)
+  values (v_ticket_id, 'customer', v_user, trim(p_message), p_attachment_url, false);
+
+  return json_build_object('id', v_ticket_id, 'ticket_code', v_code);
+end;
+$$;
+
+grant execute on function public.create_support_ticket(text, text, text, text, uuid, uuid, uuid, text, date, numeric, text, text, text) to authenticated;
+
+-- Either the ticket owner (customer) or an admin with manage_support can
+-- post into the conversation. Admin replies create an in-app notification
+-- automatically (the email is sent separately by the frontend calling the
+-- send-support-email Edge Function right after this succeeds).
+create or replace function public.send_support_reply(
+  p_ticket_id uuid,
+  p_message text,
+  p_attachment_url text default null
+) returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_ticket public.support_tickets%rowtype;
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null then
+    raise exception 'You must be logged in.';
+  end if;
+  if p_message is null or length(trim(p_message)) = 0 then
+    raise exception 'Message cannot be empty.';
+  end if;
+
+  select * into v_ticket from public.support_tickets where id = p_ticket_id;
+  if not found then
+    raise exception 'Ticket not found.';
+  end if;
+
+  if v_ticket.user_id = v_uid then
+    insert into public.support_messages (ticket_id, sender_type, sender_id, message, attachment_url, is_read)
+    values (p_ticket_id, 'customer', v_uid, trim(p_message), p_attachment_url, false);
+
+    update public.support_tickets
+    set last_message_at = now(),
+        has_unread_customer_message = true,
+        status = case when status = 'waiting_customer' then 'open' else status end
+    where id = p_ticket_id;
+
+    return json_build_object('status', 'ok', 'as', 'customer');
+
+  elsif public.has_permission('manage_support') then
+    insert into public.support_messages (ticket_id, sender_type, sender_id, message, attachment_url, is_read)
+    values (p_ticket_id, 'admin', v_uid, trim(p_message), p_attachment_url, false);
+
+    update public.support_tickets
+    set last_message_at = now(),
+        has_unread_admin_reply = true
+    where id = p_ticket_id;
+
+    insert into public.notifications (user_id, title, message, type, related_id)
+    values (
+      v_ticket.user_id,
+      'New Support Reply',
+      'You have received a new reply from Support on ticket ' || v_ticket.ticket_code || '.',
+      'support_reply',
+      p_ticket_id
+    );
+
+    return json_build_object('status', 'ok', 'as', 'admin');
+
+  else
+    raise exception 'Not authorized.';
+  end if;
+end;
+$$;
+
+grant execute on function public.send_support_reply(uuid, text, text) to authenticated;
+
+-- Admin-only status change.
+create or replace function public.admin_update_ticket_status(p_ticket_id uuid, p_status text)
 returns json
 language plpgsql security definer set search_path = public as $$
 begin
   if not public.has_permission('manage_support') then
     raise exception 'Not authorized.';
   end if;
-  if p_status not in ('open','responded','closed') then
+  if p_status not in ('open','in_progress','waiting_customer','resolved','closed') then
     raise exception 'Invalid status.';
   end if;
-  update public.support_messages set status = p_status, admin_remark = p_remark, updated_at = now() where id = p_message_id;
+  update public.support_tickets set status = p_status where id = p_ticket_id;
   if not found then
-    raise exception 'Message not found.';
+    raise exception 'Ticket not found.';
   end if;
-  return json_build_object('status','ok');
+  return json_build_object('status', 'ok');
 end;
 $$;
 
-grant execute on function public.admin_update_support_message(uuid, text, text) to authenticated;
+grant execute on function public.admin_update_ticket_status(uuid, text) to authenticated;
+
+-- Called when either side OPENS a ticket: marks the other side's
+-- messages as read, clears the relevant unread flag, and marks any
+-- matching notification as read (so the bell badge count updates).
+create or replace function public.mark_ticket_read(p_ticket_id uuid)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_ticket public.support_tickets%rowtype;
+  v_uid uuid := auth.uid();
+begin
+  select * into v_ticket from public.support_tickets where id = p_ticket_id;
+  if not found then
+    raise exception 'Ticket not found.';
+  end if;
+
+  if v_ticket.user_id = v_uid then
+    update public.support_messages set is_read = true where ticket_id = p_ticket_id and sender_type = 'admin' and is_read = false;
+    update public.support_tickets set has_unread_admin_reply = false where id = p_ticket_id;
+    update public.notifications set is_read = true where related_id = p_ticket_id and user_id = v_uid and is_read = false;
+    return json_build_object('status', 'ok');
+
+  elsif public.has_permission('manage_support') then
+    update public.support_messages set is_read = true where ticket_id = p_ticket_id and sender_type = 'customer' and is_read = false;
+    update public.support_tickets set has_unread_customer_message = false where id = p_ticket_id;
+    return json_build_object('status', 'ok');
+
+  else
+    raise exception 'Not authorized.';
+  end if;
+end;
+$$;
+
+grant execute on function public.mark_ticket_read(uuid) to authenticated;
 
 -- Saves (or refreshes) a browser's Web Push subscription. Works for both
 -- signed-in customers (linked to their account) and anonymous visitors
@@ -1205,6 +1409,7 @@ alter table public.fund_request_receipts enable row level security;
 alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
 alter table public.offers enable row level security;
+alter table public.support_tickets enable row level security;
 alter table public.support_messages enable row level security;
 alter table public.notifications enable row level security;
 alter table public.payment_settings enable row level security;
@@ -1326,15 +1531,22 @@ create policy "offers_update" on public.offers
 create policy "offers_delete" on public.offers
   for delete using (public.has_permission('manage_offers'));
 
--- ---------------- support_messages ----------------
-create policy "support_select" on public.support_messages
+-- ---------------- support_tickets / support_messages ----------------
+-- No direct INSERT/UPDATE policies on purpose - every write goes through
+-- a SECURITY DEFINER RPC (create_support_ticket / send_support_reply /
+-- admin_update_ticket_status / mark_ticket_read) so ownership and
+-- permission are always checked on the server.
+create policy "support_tickets_select" on public.support_tickets
   for select using (user_id = auth.uid() or public.is_admin());
 
-create policy "support_insert" on public.support_messages
-  for insert with check (user_id is null or user_id = auth.uid());
-
-create policy "support_update_admin" on public.support_messages
-  for update using (public.has_permission('manage_support')) with check (public.has_permission('manage_support'));
+create policy "support_select" on public.support_messages
+  for select using (
+    exists (
+      select 1 from public.support_tickets t
+      where t.id = support_messages.ticket_id
+        and (t.user_id = auth.uid() or public.is_admin())
+    )
+  );
 
 -- ---------------- notifications ----------------
 create policy "notifications_select" on public.notifications

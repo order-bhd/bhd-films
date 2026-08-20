@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { supabase } from '../../lib/supabase'
 import {
   LayoutDashboard,
   Users,
@@ -35,7 +36,7 @@ const NAV = [
   { to: '/admin/wallet-transactions', label: 'Wallet Transactions', icon: History, perm: 'manage_wallets' },
   { to: '/admin/payment-settings', label: 'Payment Settings', icon: QrCode, perm: 'manage_payment_settings' },
   { to: '/admin/offers', label: 'Offers', icon: Gift, perm: 'manage_offers' },
-  { to: '/admin/support', label: 'Support Messages', icon: MessageSquare, perm: 'manage_support' },
+  { to: '/admin/support', label: 'Support Tickets', icon: MessageSquare, perm: 'manage_support', unreadKey: 'support' },
   { to: '/admin/reports', label: 'Reports', icon: BarChart3, perm: 'view_customers' },
   { to: '/admin/audit-log', label: 'Audit Log', icon: ShieldCheck, perm: 'view_audit_log' },
   { to: '/admin/admins', label: 'Admin Users', icon: UserCog, perm: 'manage_admins' }
@@ -45,6 +46,25 @@ export default function AdminLayout() {
   const { adminRole, adminPermissions, signOut } = useAuth()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [unreadSupport, setUnreadSupport] = useState(0)
+
+  useEffect(() => {
+    async function loadUnread() {
+      const { count } = await supabase
+        .from('support_tickets')
+        .select('id', { count: 'exact', head: true })
+        .eq('has_unread_customer_message', true)
+      setUnreadSupport(count || 0)
+    }
+    loadUnread()
+    const channel = supabase
+      .channel('admin-support-unread-badge')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, loadUnread)
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
 
   function allowed(perm) {
     if (!perm) return true
@@ -69,6 +89,21 @@ export default function AdminLayout() {
         >
           <item.icon size={16} />
           {item.label}
+          {item.unreadKey === 'support' && unreadSupport > 0 && (
+            <span
+              style={{
+                marginLeft: 'auto',
+                background: 'var(--crimson, #e0435a)',
+                color: '#fff',
+                fontSize: 10,
+                fontWeight: 800,
+                borderRadius: 8,
+                padding: '1px 6px'
+              }}
+            >
+              {unreadSupport}
+            </span>
+          )}
         </NavLink>
       ))}
     </>

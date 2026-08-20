@@ -69,9 +69,11 @@ bhd-films/
 │   ├── migration_002_popular_services.sql   <- only if schema.sql already ran before this existed
 │   ├── migration_003_push_notifications.sql <- only if schema.sql already ran before this existed
 │   ├── migration_004_qr_per_amount.sql      <- only if schema.sql already ran before this existed
+│   ├── migration_005_support_system.sql     <- only if schema.sql already ran before this existed
 │   ├── cron_good_morning.sql            <- optional: daily automatic push (see step 10.8)
 │   └── functions/
-│       └── send-push/index.ts           <- Edge Function that actually sends push notifications
+│       ├── send-push/index.ts           <- Edge Function that sends push notifications
+│       └── send-support-email/index.ts  <- Edge Function that emails customers on Admin replies
 ├── public/
 │   ├── manifest.webmanifest             <- makes the site installable ("Add to Home Screen")
 │   ├── sw.js                            <- service worker: receives push, shows notifications
@@ -411,3 +413,83 @@ point of using SECURITY DEFINER functions + RLS instead of a custom server.
    "Notify Customers" on an offer as admin — a real push should arrive.
 
 That loop exercises every core piece of the system end to end.
+
+---
+
+## 16. Set up the Support & Ticket System
+
+This adds a full two-way support system: the customer picks an issue
+category, a smart form shows only the relevant fields, and everything
+(customer name, email, mobile, related order/wallet transaction) is
+attached automatically. When Admin replies, the customer gets a bell
+notification on the website AND an email.
+
+### 16.1 Run the database migration
+
+1. Go to **supabase.com** → your project → **SQL Editor** → **New query**.
+2. Open `supabase/migration_005_support_system.sql` from this project,
+   copy its entire contents, paste into the SQL Editor, and click **Run**.
+3. You should see "Success. No rows returned". Safe to re-run if you ever
+   need to.
+
+This also creates the `support-attachments` storage bucket automatically
+— no separate storage step needed.
+
+### 16.2 Create a free Resend account (for the reply email)
+
+1. Go to **resend.com** and sign up (free tier: 3,000 emails/month).
+2. Once logged in, go to **API Keys** → **Create API Key** → copy the key
+   (starts with `re_`). You won't be able to see it again, so paste it
+   somewhere safe for the next step.
+3. (Optional, recommended once you're ready to go live) Under **Domains**,
+   add and verify your own domain so emails come from
+   `support@yourdomain.com` instead of Resend's shared test address. You
+   can skip this at first — see the fallback note below.
+
+### 16.3 Set the Edge Function secrets
+
+In your terminal, inside the `bhd-films` folder:
+
+```
+npx supabase secrets set RESEND_API_KEY=your_resend_api_key_here
+```
+```
+npx supabase secrets set RESEND_FROM_EMAIL="BHD Films Support <onboarding@resend.dev>"
+```
+```
+npx supabase secrets set SITE_URL=https://bhd-films.vercel.app
+```
+
+(If you verified your own domain in 16.2, replace the `RESEND_FROM_EMAIL`
+value with `"BHD Films Support <support@yourdomain.com>"`.)
+
+### 16.4 Deploy the email Edge Function
+
+```
+npx supabase functions deploy send-support-email
+```
+
+### 16.5 Push the code
+
+```
+git add -A
+```
+```
+git commit -m "add support ticket system"
+```
+```
+git push
+```
+
+### 16.6 Test it end to end
+
+1. As a customer, go to **Support** → **New Support Ticket**, pick a
+   category, fill the (short) form, and submit.
+2. As admin, go to **Support Tickets**, open the new ticket — you should
+   see the customer's name/email/mobile and any related order/wallet
+   details automatically, with no searching required.
+3. Type a reply and send it.
+4. As the customer: the bell icon in the header should show a red badge
+   within a second or two, and the ticket should show the reply. Check the
+   customer's email inbox too (and spam folder, especially while using the
+   shared `onboarding@resend.dev` test address).

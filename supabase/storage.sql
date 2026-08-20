@@ -14,6 +14,12 @@ insert into storage.buckets (id, name, public)
 values ('payment-qr', 'payment-qr', true)
 on conflict (id) do nothing;
 
+-- Bucket for support ticket attachments (screenshots / payment proof).
+-- PRIVATE - not publicly readable, same per-customer-folder rule as receipts.
+insert into storage.buckets (id, name, public)
+values ('support-attachments', 'support-attachments', false)
+on conflict (id) do nothing;
+
 -- ---------------- receipts bucket policies ----------------
 -- Customers must upload to a path that starts with their own user id,
 -- e.g. "receipts/<their-uid>/1699999999.jpg". The app code enforces this
@@ -52,3 +58,18 @@ using (bucket_id = 'payment-qr' and public.has_permission('manage_payment_settin
 create policy "payment_qr_admin_delete"
 on storage.objects for delete to authenticated
 using (bucket_id = 'payment-qr' and public.has_permission('manage_payment_settings'));
+
+-- ---------------- support-attachments bucket policies ----------------
+create policy "support_attachments_insert_own_folder"
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'support-attachments'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
+
+create policy "support_attachments_select_own_or_admin"
+on storage.objects for select to authenticated
+using (
+  bucket_id = 'support-attachments'
+  and ((storage.foldername(name))[1] = auth.uid()::text or public.is_admin())
+);

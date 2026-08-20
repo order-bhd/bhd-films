@@ -21,6 +21,7 @@ import { useWallet } from '../../hooks/useWallet'
 import { useInstallPrompt } from '../../context/InstallPromptContext'
 import { usePushNotifications } from '../../hooks/usePushNotifications'
 import { formatCurrency, initialsFromName } from '../../utils/format'
+import NotificationBell from '../common/NotificationBell'
 
 const DRAWER_LINKS = [
   { to: '/services', label: 'All Services', icon: LayoutGrid },
@@ -57,9 +58,12 @@ export default function TopHeader() {
         </div>
 
         {isLoggedIn ? (
-          <button className="avatar-circle avatar-btn" onClick={() => navigate('/profile')} aria-label="Profile">
-            {initialsFromName(profile?.full_name || profile?.username)}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <NotificationBell />
+            <button className="avatar-circle avatar-btn" onClick={() => navigate('/profile')} aria-label="Profile">
+              {initialsFromName(profile?.full_name || profile?.username)}
+            </button>
+          </div>
         ) : (
           <button className="icon-btn" onClick={() => navigate('/login')} aria-label="Login">
             <User size={18} />
