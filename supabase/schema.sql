@@ -177,6 +177,7 @@ create table public.refund_requests (
   ordered_quantity int,
   delivered_quantity int,
   reason text,
+  customer_proof_path text,
   status text not null default 'pending' check (status in ('pending','approved','rejected')),
   resolution_method text check (resolution_method in ('wallet','bank')),
   receipt_path text,
@@ -946,7 +947,7 @@ grant execute on function public.admin_review_fund_request(uuid, text, text) to 
 -- Customer creates a refund request. They can only ever request
 -- "wallet" as far as they're concerned - the amount is always exactly
 -- what they actually paid for that order (after any coupon discount).
-create or replace function public.create_refund_request(p_order_id uuid, p_reason text default null)
+create or replace function public.create_refund_request(p_order_id uuid, p_reason text default null, p_customer_proof_path text default null)
 returns json
 language plpgsql security definer set search_path = public as $$
 declare
@@ -971,21 +972,27 @@ begin
   if exists (select 1 from public.refund_requests where order_id = p_order_id and status = 'pending') then
     raise exception 'A refund request for this order is already pending.';
   end if;
+  -- The proof photo, if any, must live in the customer's own storage
+  -- folder (the refund-customer-proof bucket's own insert policy already
+  -- enforces this at upload time, but we double-check here too).
+  if p_customer_proof_path is not null and split_part(p_customer_proof_path, '/', 1) <> v_user::text then
+    raise exception 'Invalid proof photo.';
+  end if;
 
   v_amount := greatest(v_order.grand_total - coalesce(v_order.discount_amount, 0), 0);
   select coalesce(sum(quantity), 0) into v_ordered_qty from public.order_items where order_id = p_order_id;
 
   v_code := public.generate_code('RF');
 
-  insert into public.refund_requests (request_code, order_id, user_id, amount, ordered_quantity, reason, status)
-  values (v_code, p_order_id, v_user, v_amount, v_ordered_qty, nullif(trim(coalesce(p_reason, '')), ''), 'pending')
+  insert into public.refund_requests (request_code, order_id, user_id, amount, ordered_quantity, reason, customer_proof_path, status)
+  values (v_code, p_order_id, v_user, v_amount, v_ordered_qty, nullif(trim(coalesce(p_reason, '')), ''), nullif(trim(coalesce(p_customer_proof_path, '')), ''), 'pending')
   returning id into v_id;
 
   return json_build_object('id', v_id, 'request_code', v_code, 'amount', v_amount);
 end;
 $$;
 
-grant execute on function public.create_refund_request(uuid, text) to authenticated;
+grant execute on function public.create_refund_request(uuid, text, text) to authenticated;
 
 -- Admin approves (wallet or bank/UPI) or rejects a refund request.
 -- Wallet approvals credit the wallet instantly. Bank/UPI approvals do

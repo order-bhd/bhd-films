@@ -27,6 +27,14 @@ insert into storage.buckets (id, name, public)
 values ('refund-receipts', 'refund-receipts', false)
 on conflict (id) do nothing;
 
+-- Bucket for customer-uploaded photos when REQUESTING a refund (e.g. a
+-- screenshot of their UPI QR code, or their own payment receipt) so the
+-- admin knows where/how to send a bank/UPI refund. PRIVATE - only the
+-- customer who uploaded it (and admins) can view it.
+insert into storage.buckets (id, name, public)
+values ('refund-customer-proof', 'refund-customer-proof', false)
+on conflict (id) do nothing;
+
 -- ---------------- receipts bucket policies ----------------
 -- Customers must upload to a path that starts with their own user id,
 -- e.g. "receipts/<their-uid>/1699999999.jpg". The app code enforces this
@@ -96,5 +104,22 @@ create policy "refund_receipts_select_own_or_admin"
 on storage.objects for select to authenticated
 using (
   bucket_id = 'refund-receipts'
+  and ((storage.foldername(name))[1] = auth.uid()::text or public.is_admin())
+);
+
+-- ---------------- refund-customer-proof bucket policies ----------------
+-- The customer uploads here themselves (own folder only) when requesting
+-- a refund. Only they (and admins) can ever view it.
+create policy "refund_customer_proof_insert_own_folder"
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'refund-customer-proof'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
+
+create policy "refund_customer_proof_select_own_or_admin"
+on storage.objects for select to authenticated
+using (
+  bucket_id = 'refund-customer-proof'
   and ((storage.foldername(name))[1] = auth.uid()::text or public.is_admin())
 );

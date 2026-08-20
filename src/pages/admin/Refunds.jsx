@@ -106,6 +106,11 @@ export default function Refunds() {
     if (data?.signedUrl) setReceiptModal(data.signedUrl)
   }
 
+  async function viewCustomerProof(path) {
+    const { data } = await supabase.storage.from('refund-customer-proof').createSignedUrl(path, 300)
+    if (data?.signedUrl) setReceiptModal(data.signedUrl)
+  }
+
   const visible = statusFilter === 'all' ? requests : requests.filter((r) => r.status === statusFilter)
 
   if (loading) return <Loader />
@@ -143,6 +148,11 @@ export default function Refunds() {
                 {r.status}{r.status === 'approved' && r.resolution_method ? ` · ${r.resolution_method}` : ''}
               </span>
               <div style={{ display: 'flex', gap: 6 }}>
+                {r.customer_proof_path && (
+                  <button className="btn btn-secondary btn-sm" style={{ width: 'auto' }} onClick={() => viewCustomerProof(r.customer_proof_path)}>
+                    Customer's Photo
+                  </button>
+                )}
                 {r.status === 'approved' && r.resolution_method === 'bank' && r.receipt_path && (
                   <button className="btn btn-secondary btn-sm" style={{ width: 'auto' }} onClick={() => viewReceipt(r.receipt_path)}>
                     View Proof
@@ -177,6 +187,16 @@ export default function Refunds() {
             <p className="text-faint" style={{ fontSize: 11.5, marginBottom: 10, background: 'var(--surface)', padding: 8, borderRadius: 8 }}>
               Customer's note: {actionModal.request.reason}
             </p>
+          )}
+          {actionModal.request.customer_proof_path && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              style={{ width: 'auto', marginBottom: 10 }}
+              onClick={() => viewCustomerProof(actionModal.request.customer_proof_path)}
+            >
+              View Customer's Photo
+            </button>
           )}
           <p className="text-faint" style={{ fontSize: 11.5, marginBottom: 12 }}>
             {(actionModal.request.orders?.order_items || []).map((i) => i.service_name_snapshot).join(', ') || 'Order details unavailable'}

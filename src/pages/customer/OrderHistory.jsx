@@ -25,6 +25,7 @@ export default function OrderHistory() {
   const [expanded, setExpanded] = useState(null)
   const [refundModal, setRefundModal] = useState(null) // order being refunded
   const [refundReason, setRefundReason] = useState('')
+  const [refundProofFile, setRefundProofFile] = useState(null)
   const [refundBusy, setRefundBusy] = useState(false)
   const [refundError, setRefundError] = useState('')
   const [receiptModal, setReceiptModal] = useState(null) // signed URL string
@@ -61,6 +62,7 @@ export default function OrderHistory() {
   function openRefundModal(order) {
     setRefundModal(order)
     setRefundReason('')
+    setRefundProofFile(null)
     setRefundError('')
   }
 
@@ -68,9 +70,23 @@ export default function OrderHistory() {
     if (!refundModal) return
     setRefundBusy(true)
     setRefundError('')
+
+    let proofPath = null
+    if (refundProofFile) {
+      const path = `${user.id}/${Date.now()}-${refundProofFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const { error: uploadError } = await supabase.storage.from('refund-customer-proof').upload(path, refundProofFile)
+      if (uploadError) {
+        setRefundBusy(false)
+        setRefundError(uploadError.message || 'Could not upload your photo.')
+        return
+      }
+      proofPath = path
+    }
+
     const { error } = await supabase.rpc('create_refund_request', {
       p_order_id: refundModal.id,
-      p_reason: refundReason.trim() || null
+      p_reason: refundReason.trim() || null,
+      p_customer_proof_path: proofPath
     })
     setRefundBusy(false)
     if (error) {
@@ -209,6 +225,11 @@ export default function OrderHistory() {
             onChange={(e) => setRefundReason(e.target.value)}
             placeholder="e.g. Service not fully delivered. If you want bank/UPI refund instead of wallet, add your UPI ID or account number here."
           />
+          <span className="field-label" style={{ marginTop: 10, display: 'block' }}>Attach a photo (optional)</span>
+          <p className="text-faint" style={{ fontSize: 11, marginBottom: 6 }}>
+            e.g. a screenshot of your UPI QR code, your payment receipt, or your bank details — only if you want a bank/UPI refund instead of wallet.
+          </p>
+          <input type="file" accept="image/*" onChange={(e) => setRefundProofFile(e.target.files?.[0] || null)} />
           {refundError && <div className="field-error" style={{ marginTop: 8 }}>{refundError}</div>}
           <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={submitRefund} disabled={refundBusy}>
             {refundBusy ? 'Submitting…' : 'Submit Refund Request'}
