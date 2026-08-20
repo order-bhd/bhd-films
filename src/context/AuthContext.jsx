@@ -62,6 +62,19 @@ export function AuthProvider({ children }) {
     if (error) throw error
   }, [])
 
+  const signInWithPassword = useCallback(async (email, password) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) throw error
+  }, [])
+
+  // Sets/changes a password on the CURRENTLY logged-in account (e.g. one
+  // that originally only had Google sign-in). After this, the same
+  // account can log in either with Google or with email+password.
+  const updatePassword = useCallback(async (newPassword) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) throw error
+  }, [])
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
   }, [])
@@ -79,6 +92,8 @@ export function AuthProvider({ children }) {
     isSuperAdmin: adminRole === 'super_admin',
     loading,
     signInWithGoogle,
+    signInWithPassword,
+    updatePassword,
     signOut,
     refreshProfile
   }

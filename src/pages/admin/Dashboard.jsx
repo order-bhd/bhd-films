@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { KeyRound } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import Loader from '../../components/common/Loader'
 import { formatCurrency, formatDate } from '../../utils/format'
 import { getRange } from '../../utils/dateRanges'
+import { useAuth } from '../../context/AuthContext'
 
 const FILTERS = [
   { key: 'today', label: 'Today' },
@@ -14,6 +16,13 @@ const FILTERS = [
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { updatePassword } = useAuth()
+  const [pwOpen, setPwOpen] = useState(false)
+  const [pw1, setPw1] = useState('')
+  const [pw2, setPw2] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
+  const [pwError, setPwError] = useState('')
+  const [pwDone, setPwDone] = useState(false)
   const [filter, setFilter] = useState('month')
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState(null)
@@ -72,6 +81,30 @@ export default function Dashboard() {
     }
   }, [filter])
 
+  async function handleSetPassword() {
+    setPwError('')
+    setPwDone(false)
+    if (pw1.length < 6) {
+      setPwError('Password must be at least 6 characters.')
+      return
+    }
+    if (pw1 !== pw2) {
+      setPwError('Passwords do not match.')
+      return
+    }
+    setPwBusy(true)
+    try {
+      await updatePassword(pw1)
+      setPwDone(true)
+      setPw1('')
+      setPw2('')
+    } catch (e) {
+      setPwError(e.message || 'Could not set password.')
+    } finally {
+      setPwBusy(false)
+    }
+  }
+
   if (loading || !stats) return <Loader />
 
   return (
@@ -90,6 +123,39 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="surface-card" style={{ marginBottom: 16 }}>
+        <button
+          className="row-between"
+          style={{ width: '100%', background: 'none', border: 'none' }}
+          onClick={() => setPwOpen((v) => !v)}
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13.5 }}>
+            <KeyRound size={16} /> Set / Change Login Password
+          </span>
+          <span className="text-faint" style={{ fontSize: 11 }}>{pwOpen ? 'Hide' : 'Show'}</span>
+        </button>
+        {pwOpen && (
+          <div style={{ marginTop: 12 }}>
+            <p className="text-faint" style={{ fontSize: 11.5, marginBottom: 10 }}>
+              Set a password for the account you're logged into right now, so you can log in with email + password next time instead of always using Google.
+            </p>
+            <div style={{ marginBottom: 10 }}>
+              <span className="field-label">New Password</span>
+              <input type="password" value={pw1} onChange={(e) => setPw1(e.target.value)} autoComplete="new-password" />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <span className="field-label">Confirm Password</span>
+              <input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" />
+            </div>
+            {pwError && <div className="field-error" style={{ marginBottom: 10 }}>{pwError}</div>}
+            {pwDone && <p className="text-success" style={{ fontSize: 12, marginBottom: 10 }}>Password set! You can now log in with your email + this password.</p>}
+            <button className="btn btn-primary btn-sm" onClick={handleSetPassword} disabled={pwBusy}>
+              {pwBusy ? 'Saving…' : 'Save Password'}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="stats-grid" style={{ marginBottom: 20 }}>

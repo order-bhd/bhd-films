@@ -1,14 +1,17 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Chrome } from 'lucide-react'
+import { Chrome, LogIn } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import Loader from '../../components/common/Loader'
 
 export default function AdminLogin() {
-  const { signInWithGoogle, isLoggedIn, isAdmin, loading } = useAuth()
+  const { signInWithGoogle, signInWithPassword, isLoggedIn, isAdmin, loading } = useAuth()
   const navigate = useNavigate()
   const [error, setError] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   if (loading) return <Loader />
 
@@ -23,6 +26,24 @@ export default function AdminLogin() {
       await signInWithGoogle('/admin')
     } catch (e) {
       setError(e.message || 'Could not start Google sign-in.')
+    }
+  }
+
+  async function handlePasswordLogin(e) {
+    e.preventDefault()
+    setError('')
+    if (!email.trim() || !password) {
+      setError('Enter both your email and password.')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await signInWithPassword(email.trim(), password)
+      navigate('/admin', { replace: true })
+    } catch (err) {
+      setError(err.message || 'Could not log in. Check your email and password.')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -44,7 +65,27 @@ export default function AdminLogin() {
         </p>
       )}
 
-      <button className="btn btn-secondary" style={{ maxWidth: 280 }} onClick={handleGoogle}>
+      <form onSubmit={handlePasswordLogin} style={{ width: '100%', maxWidth: 280 }}>
+        <div style={{ marginBottom: 10 }}>
+          <span className="field-label">Email</span>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <span className="field-label">Password</span>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+        </div>
+        <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={submitting}>
+          <LogIn size={18} /> {submitting ? 'Logging in…' : 'Log In'}
+        </button>
+      </form>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', maxWidth: 280, margin: '18px 0' }}>
+        <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+        <span className="text-faint" style={{ fontSize: 11 }}>or</span>
+        <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+      </div>
+
+      <button className="btn btn-secondary" style={{ maxWidth: 280, width: '100%' }} onClick={handleGoogle}>
         <Chrome size={18} /> Continue with Google
       </button>
       {error && <div className="field-error">{error}</div>}
