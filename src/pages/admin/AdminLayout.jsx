@@ -21,9 +21,11 @@ import {
   LogOut,
   Menu,
   Clapperboard,
+  BellRing,
   X
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { usePushNotifications } from '../../hooks/usePushNotifications'
 
 const NAV = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true, perm: null },
@@ -50,6 +52,7 @@ export default function AdminLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [unreadSupport, setUnreadSupport] = useState(0)
   const [unreadOrders, setUnreadOrders] = useState(0)
+  const { supported: pushSupported, subscribed: pushSubscribed, subscribing: pushSubscribing, subscribe: pushSubscribe } = usePushNotifications()
 
   useEffect(() => {
     async function loadUnread() {
@@ -138,6 +141,18 @@ export default function AdminLayout() {
     </>
   )
 
+  const notifyButton = pushSupported && (
+    <button
+      className="admin-nav-link"
+      style={{ width: '100%', background: 'none', border: 'none' }}
+      onClick={pushSubscribe}
+      disabled={pushSubscribed || pushSubscribing}
+    >
+      <BellRing size={16} />
+      {pushSubscribed ? 'Notifications Enabled' : pushSubscribing ? 'Enabling…' : 'Enable Notifications'}
+    </button>
+  )
+
   return (
     <div className="admin-shell">
       <div className="admin-topbar">
@@ -160,6 +175,8 @@ export default function AdminLayout() {
             </div>
             {linkList}
             <div className="divider" />
+            {notifyButton}
+            <div className="divider" />
             <button className="btn btn-secondary" onClick={() => signOut().then(() => navigate('/admin/login'))}>
               <LogOut size={16} /> Logout
             </button>
@@ -173,6 +190,7 @@ export default function AdminLayout() {
         </div>
         {linkList}
         <div className="divider" />
+        {notifyButton}
         <button className="admin-nav-link" style={{ width: '100%', background: 'none', border: 'none' }} onClick={() => signOut().then(() => navigate('/admin/login'))}>
           <LogOut size={16} /> Logout
         </button>

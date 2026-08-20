@@ -11,6 +11,10 @@
 //      "Notify Customers" buttons on Offers / Rate Control.
 //   2. The daily "Good Morning" pg_cron job, authenticated with the
 //      project's service-role key (see supabase/cron_good_morning.sql).
+//   3. Database triggers that fire on a new order / new support message,
+//      also using the service-role key, with audience = "admins" so only
+//      admin devices (not customers) get pinged (see
+//      supabase/migration_007_admin_notifications.sql).
 //
 // Deploy with:  supabase functions deploy send-push
 // Secrets needed (supabase secrets set ...): VAPID_PUBLIC_KEY,
@@ -73,7 +77,7 @@ Deno.serve(async (req) => {
     const title = String(body.title || 'BHD Films').slice(0, 120)
     const message = String(body.body || '').slice(0, 500)
     const url = String(body.url || '/').slice(0, 300)
-    const audience = body.audience === 'user' ? 'user' : 'all'
+    const audience = body.audience === 'user' ? 'user' : body.audience === 'admins' ? 'admins' : 'all'
     const userId = body.userId || null
 
     if (!message) {
@@ -84,7 +88,18 @@ Deno.serve(async (req) => {
     }
 
     let query = adminClient.from('push_subscriptions').select('id, endpoint, p256dh, auth')
-    if (audience === 'user') query = query.eq('user_id', userId)
+    if (audience === 'user') {
+      query = query.eq('user_id', userId)
+    } else if (audience === 'admins') {
+      // Only send to devices belonging to logged-in admin accounts.
+      const { data: adminRows, error: adminErr } = await adminClient.from('admin_users').select('id')
+      if (adminErr) throw adminErr
+      const adminIds = (adminRows || []).map((a) => a.id)
+      if (adminIds.length === 0) {
+        return json({ sent: 0, removed: 0, failed: 0, total: 0 })
+      }
+      query = query.in('user_id', adminIds)
+    }
     const { data: subscriptions, error: subError } = await query
     if (subError) throw subError
 
