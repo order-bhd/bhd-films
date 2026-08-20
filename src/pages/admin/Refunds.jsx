@@ -173,6 +173,11 @@ export default function Refunds() {
           <p className="text-dim" style={{ fontSize: 12.5, marginBottom: 4 }}>
             {actionModal.request.request_code} · Order {actionModal.request.orders?.order_code} · {formatCurrency(actionModal.request.amount)}
           </p>
+          {actionModal.request.reason && (
+            <p className="text-faint" style={{ fontSize: 11.5, marginBottom: 10, background: 'var(--surface)', padding: 8, borderRadius: 8 }}>
+              Customer's note: {actionModal.request.reason}
+            </p>
+          )}
           <p className="text-faint" style={{ fontSize: 11.5, marginBottom: 12 }}>
             {(actionModal.request.orders?.order_items || []).map((i) => i.service_name_snapshot).join(', ') || 'Order details unavailable'}
             {' · Ordered qty: '}{orderedQty(actionModal.request)}

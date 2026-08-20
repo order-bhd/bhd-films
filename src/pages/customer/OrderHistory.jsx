@@ -200,10 +200,15 @@ export default function OrderHistory() {
             Refund amount: <strong className="text-gold">{formatCurrency(refundModal.grand_total - (refundModal.discount_amount || 0))}</strong>
           </p>
           <p className="text-faint" style={{ fontSize: 11.5, marginBottom: 10 }}>
-            This will be refunded to your BHD Films wallet once approved by our team.
+            This will be refunded to your BHD Films wallet once approved by our team. If you'd prefer it sent to your bank/UPI instead, mention that below along with your UPI ID, GPay number, or bank account details.
           </p>
           <span className="field-label">Reason (optional)</span>
-          <textarea rows={3} value={refundReason} onChange={(e) => setRefundReason(e.target.value)} placeholder="Tell us what went wrong…" />
+          <textarea
+            rows={4}
+            value={refundReason}
+            onChange={(e) => setRefundReason(e.target.value)}
+            placeholder="e.g. Service not fully delivered. If you want bank/UPI refund instead of wallet, add your UPI ID or account number here."
+          />
           {refundError && <div className="field-error" style={{ marginTop: 8 }}>{refundError}</div>}
           <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={submitRefund} disabled={refundBusy}>
             {refundBusy ? 'Submitting…' : 'Submit Refund Request'}
