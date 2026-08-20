@@ -20,6 +20,13 @@ insert into storage.buckets (id, name, public)
 values ('support-attachments', 'support-attachments', false)
 on conflict (id) do nothing;
 
+-- Bucket for admin-uploaded proof-of-payment photos when a refund is
+-- paid out via bank/UPI instead of the wallet. PRIVATE - only the
+-- customer it belongs to (and admins) can view it.
+insert into storage.buckets (id, name, public)
+values ('refund-receipts', 'refund-receipts', false)
+on conflict (id) do nothing;
+
 -- ---------------- receipts bucket policies ----------------
 -- Customers must upload to a path that starts with their own user id,
 -- e.g. "receipts/<their-uid>/1699999999.jpg". The app code enforces this
@@ -71,5 +78,23 @@ create policy "support_attachments_select_own_or_admin"
 on storage.objects for select to authenticated
 using (
   bucket_id = 'support-attachments'
+  and ((storage.foldername(name))[1] = auth.uid()::text or public.is_admin())
+);
+
+-- ---------------- refund-receipts bucket policies ----------------
+-- Only admins ever UPLOAD here (they're the ones paying out a refund
+-- via bank/UPI and attaching proof). The customer it belongs to can
+-- only ever VIEW it, never upload/change it themselves.
+create policy "refund_receipts_insert_admin"
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'refund-receipts'
+  and public.is_admin()
+);
+
+create policy "refund_receipts_select_own_or_admin"
+on storage.objects for select to authenticated
+using (
+  bucket_id = 'refund-receipts'
   and ((storage.foldername(name))[1] = auth.uid()::text or public.is_admin())
 );

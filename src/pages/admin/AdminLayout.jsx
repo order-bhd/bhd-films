@@ -22,6 +22,7 @@ import {
   Menu,
   Clapperboard,
   BellRing,
+  Undo2,
   X
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
@@ -36,6 +37,7 @@ const NAV = [
   { to: '/admin/bulk-pricing', label: 'Bulk Pricing', icon: Layers, perm: 'manage_bulk_pricing' },
   { to: '/admin/orders', label: 'Orders', icon: ShoppingBag, perm: 'manage_orders', unreadKey: 'orders' },
   { to: '/admin/fund-requests', label: 'Fund Requests', icon: Banknote, perm: 'manage_fund_requests' },
+  { to: '/admin/refunds', label: 'Refunds', icon: Undo2, perm: 'manage_refunds', unreadKey: 'refunds' },
   { to: '/admin/wallet-transactions', label: 'Wallet Transactions', icon: History, perm: 'manage_wallets' },
   { to: '/admin/payment-settings', label: 'Payment Settings', icon: QrCode, perm: 'manage_payment_settings' },
   { to: '/admin/offers', label: 'Offers', icon: Gift, perm: 'manage_offers' },
@@ -52,6 +54,7 @@ export default function AdminLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [unreadSupport, setUnreadSupport] = useState(0)
   const [unreadOrders, setUnreadOrders] = useState(0)
+  const [unreadRefunds, setUnreadRefunds] = useState(0)
   const { supported: pushSupported, subscribed: pushSubscribed, subscribing: pushSubscribing, subscribe: pushSubscribe } = usePushNotifications()
 
   useEffect(() => {
@@ -93,18 +96,37 @@ export default function AdminLayout() {
     }
   }, [])
 
+  // New refund requests badge — counts requests still "pending".
+  useEffect(() => {
+    async function loadPendingRefunds() {
+      const { count } = await supabase
+        .from('refund_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending')
+      setUnreadRefunds(count || 0)
+    }
+    loadPendingRefunds()
+    const channel = supabase
+      .channel('admin-refunds-unread-badge')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'refund_requests' }, loadPendingRefunds)
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
+
   function allowed(perm) {
     if (!perm) return true
     if (adminRole === 'super_admin') return true
     if (adminRole === 'admin') return perm !== 'manage_admins'
-    const restricted = ['manage_wallets', 'manage_rates', 'manage_bulk_pricing', 'manage_payment_settings', 'manage_admins']
+    const restricted = ['manage_wallets', 'manage_rates', 'manage_bulk_pricing', 'manage_payment_settings', 'manage_admins', 'manage_refunds']
     if (restricted.includes(perm)) return false
     return !!adminPermissions?.[perm]
   }
 
   const visibleNav = NAV.filter((item) => allowed(item.perm))
 
-  const badgeCounts = { support: unreadSupport, orders: unreadOrders }
+  const badgeCounts = { support: unreadSupport, orders: unreadOrders, refunds: unreadRefunds }
 
   const linkList = (
     <>

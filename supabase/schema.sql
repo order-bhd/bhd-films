@@ -164,6 +164,29 @@ create table public.order_items (
   created_at timestamptz not null default now()
 );
 
+-- Customer refund requests. Customers can only ever request "wallet".
+-- Admins decide, when reviewing, whether to actually pay it back to the
+-- wallet or pay it externally via bank/UPI (uploading a receipt as
+-- proof) - see admin_review_refund_request() below.
+create table public.refund_requests (
+  id uuid primary key default gen_random_uuid(),
+  request_code text not null unique,
+  order_id uuid not null references public.orders(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  amount numeric(12,2) not null,
+  ordered_quantity int,
+  delivered_quantity int,
+  reason text,
+  status text not null default 'pending' check (status in ('pending','approved','rejected')),
+  resolution_method text check (resolution_method in ('wallet','bank')),
+  receipt_path text,
+  admin_remark text,
+  reviewed_by uuid references auth.users(id),
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- Every wallet movement, ever. This is the permanent ledger.
 create table public.wallet_transactions (
   id uuid primary key default gen_random_uuid(),
@@ -360,6 +383,9 @@ create index idx_receipts_request on public.fund_request_receipts (fund_request_
 create index idx_orders_user on public.orders (user_id, created_at desc);
 create index idx_orders_status on public.orders (status);
 create index idx_order_items_order on public.order_items (order_id);
+create index idx_refund_requests_user on public.refund_requests (user_id, created_at desc);
+create index idx_refund_requests_order on public.refund_requests (order_id);
+create index idx_refund_requests_pending on public.refund_requests (status) where status = 'pending';
 create index idx_notifications_user on public.notifications (user_id, is_read);
 create index idx_audit_logs_created on public.audit_logs (created_at desc);
 create index idx_support_tickets_user on public.support_tickets (user_id, created_at desc);
@@ -399,7 +425,7 @@ language plpgsql stable security definer set search_path = public as $$
 declare
   v_role text;
   v_perms jsonb;
-  v_restricted text[] := array['manage_wallets','manage_rates','manage_bulk_pricing','manage_payment_settings','manage_admins'];
+  v_restricted text[] := array['manage_wallets','manage_rates','manage_bulk_pricing','manage_payment_settings','manage_admins','manage_refunds'];
 begin
   select role, permissions into v_role, v_perms from public.admin_users where id = auth.uid();
   if v_role is null then
@@ -517,6 +543,7 @@ create trigger trg_services_updated before update on public.services for each ro
 create trigger trg_wallets_updated before update on public.wallets for each row execute function public.set_updated_at();
 create trigger trg_orders_updated before update on public.orders for each row execute function public.set_updated_at();
 create trigger trg_fund_requests_updated before update on public.fund_requests for each row execute function public.set_updated_at();
+create trigger trg_refund_requests_updated before update on public.refund_requests for each row execute function public.set_updated_at();
 create trigger trg_support_tickets_updated before update on public.support_tickets for each row execute function public.set_updated_at();
 create trigger trg_payment_settings_updated before update on public.payment_settings for each row execute function public.set_updated_at();
 create trigger trg_payment_qr_codes_updated before update on public.payment_qr_codes for each row execute function public.set_updated_at();
@@ -915,6 +942,178 @@ end;
 $$;
 
 grant execute on function public.admin_review_fund_request(uuid, text, text) to authenticated;
+
+-- Customer creates a refund request. They can only ever request
+-- "wallet" as far as they're concerned - the amount is always exactly
+-- what they actually paid for that order (after any coupon discount).
+create or replace function public.create_refund_request(p_order_id uuid, p_reason text default null)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_user uuid := auth.uid();
+  v_order public.orders%rowtype;
+  v_amount numeric(12,2);
+  v_ordered_qty int;
+  v_code text;
+  v_id uuid;
+begin
+  if v_user is null then
+    raise exception 'You must be logged in.';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id and user_id = v_user for update;
+  if v_order is null then
+    raise exception 'Order not found.';
+  end if;
+  if v_order.status not in ('processing','completed') then
+    raise exception 'This order is not eligible for a refund request.';
+  end if;
+  if exists (select 1 from public.refund_requests where order_id = p_order_id and status = 'pending') then
+    raise exception 'A refund request for this order is already pending.';
+  end if;
+
+  v_amount := greatest(v_order.grand_total - coalesce(v_order.discount_amount, 0), 0);
+  select coalesce(sum(quantity), 0) into v_ordered_qty from public.order_items where order_id = p_order_id;
+
+  v_code := public.generate_code('RF');
+
+  insert into public.refund_requests (request_code, order_id, user_id, amount, ordered_quantity, reason, status)
+  values (v_code, p_order_id, v_user, v_amount, v_ordered_qty, nullif(trim(coalesce(p_reason, '')), ''), 'pending')
+  returning id into v_id;
+
+  return json_build_object('id', v_id, 'request_code', v_code, 'amount', v_amount);
+end;
+$$;
+
+grant execute on function public.create_refund_request(uuid, text) to authenticated;
+
+-- Admin approves (wallet or bank/UPI) or rejects a refund request.
+-- Wallet approvals credit the wallet instantly. Bank/UPI approvals do
+-- NOT touch the wallet - the admin has paid the customer directly and
+-- just needs to attach proof (receipt_path) as evidence.
+create or replace function public.admin_review_refund_request(
+  p_refund_request_id uuid,
+  p_action text,
+  p_remark text default null,
+  p_resolution_method text default null,
+  p_receipt_path text default null,
+  p_delivered_quantity int default null
+)
+returns json
+language plpgsql security definer set search_path = public as $$
+declare
+  v_admin uuid := auth.uid();
+  v_rr public.refund_requests%rowtype;
+  v_wallet public.wallets%rowtype;
+  v_before numeric;
+  v_after numeric;
+  v_final_remark text;
+begin
+  if not public.has_permission('manage_refunds') then
+    raise exception 'Not authorized.';
+  end if;
+  if p_action not in ('approve','reject') then
+    raise exception 'Invalid action.';
+  end if;
+
+  select * into v_rr from public.refund_requests where id = p_refund_request_id for update;
+  if v_rr is null then
+    raise exception 'Refund request not found.';
+  end if;
+  if v_rr.status <> 'pending' then
+    raise exception 'This request has already been reviewed.';
+  end if;
+
+  if p_action = 'approve' then
+    if p_resolution_method not in ('wallet','bank') then
+      raise exception 'Choose how this refund was paid: wallet or bank.';
+    end if;
+    if p_resolution_method = 'bank' and (p_receipt_path is null or length(trim(p_receipt_path)) = 0) then
+      raise exception 'Upload proof of payment before marking this as paid via bank/UPI.';
+    end if;
+
+    if p_resolution_method = 'wallet' then
+      select * into v_wallet from public.wallets where user_id = v_rr.user_id for update;
+      if v_wallet is null then
+        raise exception 'Wallet not found for this customer.';
+      end if;
+      v_before := v_wallet.available_fund;
+      v_after := v_before + v_rr.amount;
+      v_final_remark := coalesce(nullif(trim(p_remark), ''), 'Refund has been added to your wallet.');
+
+      update public.wallets
+      set available_fund = v_after, updated_at = now()
+      where id = v_wallet.id;
+
+      insert into public.wallet_transactions (wallet_id, user_id, type, amount, balance_before, balance_after, status, remark, related_order_id, created_by_admin_id)
+      values (v_wallet.id, v_rr.user_id, 'refund', v_rr.amount, v_before, v_after, 'completed', v_final_remark, v_rr.order_id, v_admin);
+    else
+      v_final_remark := coalesce(nullif(trim(p_remark), ''), 'Refund has been paid to your bank/UPI. See receipt for proof.');
+    end if;
+
+    update public.refund_requests
+    set status = 'approved', resolution_method = p_resolution_method, receipt_path = p_receipt_path,
+        delivered_quantity = p_delivered_quantity, admin_remark = v_final_remark,
+        reviewed_by = v_admin, reviewed_at = now(), updated_at = now()
+    where id = v_rr.id;
+
+    update public.orders set status = 'refunded', updated_at = now() where id = v_rr.order_id;
+
+    insert into public.notifications (user_id, title, message, type, related_id)
+    values (v_rr.user_id, 'Refund Approved',
+      v_final_remark || ' Amount: ' || to_char(v_rr.amount, 'FM999999990'), 'refund_request', v_rr.id);
+
+    perform public.write_audit_log('refund_approved', 'refund_request', v_rr.id::text,
+      jsonb_build_object('status', v_rr.status),
+      jsonb_build_object('status', 'approved', 'method', p_resolution_method, 'amount', v_rr.amount),
+      v_final_remark);
+
+  else -- reject
+    v_final_remark := coalesce(nullif(trim(p_remark), ''), 'This refund request was not approved.');
+    update public.refund_requests
+    set status = 'rejected', delivered_quantity = p_delivered_quantity, admin_remark = v_final_remark,
+        reviewed_by = v_admin, reviewed_at = now(), updated_at = now()
+    where id = v_rr.id;
+
+    insert into public.notifications (user_id, title, message, type, related_id)
+    values (v_rr.user_id, 'Refund Request Rejected', v_final_remark, 'refund_request', v_rr.id);
+
+    perform public.write_audit_log('refund_rejected', 'refund_request', v_rr.id::text,
+      jsonb_build_object('status', v_rr.status), jsonb_build_object('status', 'rejected'), v_final_remark);
+  end if;
+
+  return json_build_object('status', 'ok');
+end;
+$$;
+
+grant execute on function public.admin_review_refund_request(uuid, text, text, text, text, int) to authenticated;
+
+-- Optional: push-notify admins on a new refund request (see Migration
+-- 007 / notify_admins()). Safe even if that was never set up.
+create or replace function public.trg_notify_admin_new_refund()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  begin
+    perform public.notify_admins(
+      'New Refund Request 💸',
+      'Order refund requested — ₹' || to_char(new.amount, 'FM999999990') || ' (' || new.request_code || ').',
+      '/admin/refunds'
+    );
+  exception when others then
+    null;
+  end;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_refund_requests_notify_admin on public.refund_requests;
+create trigger trg_refund_requests_notify_admin
+  after insert on public.refund_requests
+  for each row execute function public.trg_notify_admin_new_refund();
 
 -- Read-only coupon preview used by the checkout screen before the
 -- customer pays. Records nothing; the real, final check happens again
@@ -1606,6 +1805,7 @@ alter table public.payment_settings enable row level security;
 alter table public.payment_qr_codes enable row level security;
 alter table public.audit_logs enable row level security;
 alter table public.push_subscriptions enable row level security;
+alter table public.refund_requests enable row level security;
 
 -- ---------------- profiles ----------------
 create policy "profiles_select" on public.profiles
@@ -1792,6 +1992,10 @@ create policy "audit_logs_select" on public.audit_logs
 
 -- ---------------- push_subscriptions (no direct client writes - RPC only) ----------------
 create policy "push_subscriptions_select" on public.push_subscriptions
+  for select using (user_id = auth.uid() or public.is_admin());
+
+-- ---------------- refund_requests (no direct client writes - RPC only) ----------------
+create policy "refund_requests_select" on public.refund_requests
   for select using (user_id = auth.uid() or public.is_admin());
 
 -- =====================================================================

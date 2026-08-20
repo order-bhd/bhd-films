@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { ReceiptText, ChevronDown, ChevronUp } from 'lucide-react'
+import { ReceiptText, ChevronDown, ChevronUp, Undo2, Eye } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import Loader from '../../components/common/Loader'
 import EmptyState from '../../components/common/EmptyState'
+import Modal from '../../components/common/Modal'
 import { formatCurrency, formatDate } from '../../utils/format'
 
 const STATUS_CHIP = {
@@ -14,30 +15,76 @@ const STATUS_CHIP = {
   refunded: 'chip-gold'
 }
 
+const REFUND_ELIGIBLE_STATUSES = ['processing', 'completed']
+
 export default function OrderHistory() {
   const { user } = useAuth()
   const [loading, setLoading] = useState(true)
   const [orders, setOrders] = useState([])
+  const [refundsByOrder, setRefundsByOrder] = useState({})
   const [expanded, setExpanded] = useState(null)
+  const [refundModal, setRefundModal] = useState(null) // order being refunded
+  const [refundReason, setRefundReason] = useState('')
+  const [refundBusy, setRefundBusy] = useState(false)
+  const [refundError, setRefundError] = useState('')
+  const [receiptModal, setReceiptModal] = useState(null) // signed URL string
+
+  async function load() {
+    setLoading(true)
+    const [ordersRes, refundsRes] = await Promise.all([
+      supabase.from('orders').select('*, order_items(*)').eq('user_id', user.id).order('created_at', { ascending: false }),
+      supabase.from('refund_requests').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
+    ])
+    const grouped = {}
+    for (const r of refundsRes.data || []) {
+      if (!grouped[r.order_id]) grouped[r.order_id] = []
+      grouped[r.order_id].push(r)
+    }
+    setOrders(ordersRes.data || [])
+    setRefundsByOrder(grouped)
+    setLoading(false)
+  }
 
   useEffect(() => {
     let mounted = true
-    async function load() {
-      setLoading(true)
-      const { data } = await supabase
-        .from('orders')
-        .select('*, order_items(*)')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
+    async function run() {
       if (!mounted) return
-      setOrders(data || [])
-      setLoading(false)
+      await load()
     }
-    if (user) load()
+    if (user) run()
     return () => {
       mounted = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
+
+  function openRefundModal(order) {
+    setRefundModal(order)
+    setRefundReason('')
+    setRefundError('')
+  }
+
+  async function submitRefund() {
+    if (!refundModal) return
+    setRefundBusy(true)
+    setRefundError('')
+    const { error } = await supabase.rpc('create_refund_request', {
+      p_order_id: refundModal.id,
+      p_reason: refundReason.trim() || null
+    })
+    setRefundBusy(false)
+    if (error) {
+      setRefundError(error.message || 'Could not submit refund request.')
+      return
+    }
+    setRefundModal(null)
+    load()
+  }
+
+  async function viewRefundReceipt(refund) {
+    const { data } = await supabase.storage.from('refund-receipts').createSignedUrl(refund.receipt_path, 300)
+    if (data?.signedUrl) setReceiptModal(data.signedUrl)
+  }
 
   if (loading) return <Loader />
 
@@ -50,6 +97,10 @@ export default function OrderHistory() {
       ) : (
         orders.map((order) => {
           const open = expanded === order.id
+          const orderRefunds = refundsByOrder[order.id] || []
+          const hasPendingRefund = orderRefunds.some((r) => r.status === 'pending')
+          const latestRefund = orderRefunds[0]
+          const canRequestRefund = REFUND_ELIGIBLE_STATUSES.includes(order.status) && !hasPendingRefund
           return (
             <div key={order.id} className="surface-card" style={{ marginBottom: 10 }}>
               <div className="row-between" style={{ cursor: 'pointer' }} onClick={() => setExpanded(open ? null : order.id)}>
@@ -100,11 +151,70 @@ export default function OrderHistory() {
                       Estimated processing time: approximately {order.estimated_time_text}.
                     </p>
                   )}
+
+                  <div style={{ marginTop: 12 }}>
+                    {canRequestRefund && (
+                      <button className="btn btn-secondary btn-sm" style={{ width: 'auto' }} onClick={() => openRefundModal(order)}>
+                        <Undo2 size={14} /> Request Refund
+                      </button>
+                    )}
+                    {hasPendingRefund && (
+                      <span className="chip chip-warning">Refund Requested — Pending</span>
+                    )}
+                    {!hasPendingRefund && latestRefund?.status === 'approved' && (
+                      <div>
+                        <p className="text-faint" style={{ fontSize: 11, margin: 0 }}>
+                          Refund approved · {latestRefund.resolution_method === 'wallet' ? 'added to your wallet' : 'paid via bank/UPI'}.
+                        </p>
+                        {latestRefund.resolution_method === 'bank' && latestRefund.receipt_path && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ width: 'auto', marginTop: 8 }}
+                            onClick={() => viewRefundReceipt(latestRefund)}
+                          >
+                            <Eye size={14} /> View Payment Proof
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {!hasPendingRefund && latestRefund?.status === 'rejected' && (
+                      <p className="text-faint" style={{ fontSize: 11 }}>
+                        Previous refund request was rejected{latestRefund.admin_remark ? `: ${latestRefund.admin_remark}` : '.'}
+                        {canRequestRefund && ' You can request again below.'}
+                      </p>
+                    )}
+                  </div>
                 </>
               )}
             </div>
           )
         })
+      )}
+
+      {refundModal && (
+        <Modal title="Request Refund" onClose={() => setRefundModal(null)}>
+          <p className="text-dim" style={{ fontSize: 12.5, marginBottom: 4 }}>
+            {refundModal.order_code}
+          </p>
+          <p style={{ fontSize: 13, marginBottom: 14 }}>
+            Refund amount: <strong className="text-gold">{formatCurrency(refundModal.grand_total - (refundModal.discount_amount || 0))}</strong>
+          </p>
+          <p className="text-faint" style={{ fontSize: 11.5, marginBottom: 10 }}>
+            This will be refunded to your BHD Films wallet once approved by our team.
+          </p>
+          <span className="field-label">Reason (optional)</span>
+          <textarea rows={3} value={refundReason} onChange={(e) => setRefundReason(e.target.value)} placeholder="Tell us what went wrong…" />
+          {refundError && <div className="field-error" style={{ marginTop: 8 }}>{refundError}</div>}
+          <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={submitRefund} disabled={refundBusy}>
+            {refundBusy ? 'Submitting…' : 'Submit Refund Request'}
+          </button>
+        </Modal>
+      )}
+
+      {receiptModal && (
+        <Modal title="Payment Proof" onClose={() => setReceiptModal(null)}>
+          <img src={receiptModal} alt="refund payment proof" style={{ width: '100%', borderRadius: 12, border: '1px solid var(--border)' }} />
+        </Modal>
       )}
     </div>
   )
