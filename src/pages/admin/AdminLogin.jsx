@@ -20,7 +20,7 @@ export default function AdminLogin() {
   async function handleGoogle() {
     setError('')
     try {
-      await signInWithGoogle()
+      await signInWithGoogle('/admin')
     } catch (e) {
       setError(e.message || 'Could not start Google sign-in.')
     }

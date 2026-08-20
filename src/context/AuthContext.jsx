@@ -53,8 +53,8 @@ export function AuthProvider({ children }) {
     }
   }, [loadProfile])
 
-  const signInWithGoogle = useCallback(async () => {
-    const redirectTo = `${window.location.origin}/`
+  const signInWithGoogle = useCallback(async (redirectPath = '/') => {
+    const redirectTo = `${window.location.origin}${redirectPath}`
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo }
