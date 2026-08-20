@@ -785,11 +785,13 @@ textarea::placeholder {
 }
 
 @media (max-width: 860px) {
+  .admin-shell { flex-direction: column; }
   .admin-sidebar { display: none; }
   .admin-topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    width: 100%;
     padding: 12px 16px;
     background: var(--bg-elevated);
     border-bottom: 1px solid var(--border-soft);
@@ -797,7 +799,7 @@ textarea::placeholder {
     top: 0;
     z-index: 20;
   }
-  .admin-main { padding: 14px; }
+  .admin-main { padding: 14px; width: 100%; }
 }
 
 .stat-card {
