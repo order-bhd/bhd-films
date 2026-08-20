@@ -219,7 +219,7 @@ export default function SupportTicketDetail() {
               placeholder="Type a message…"
               style={{ flex: 1, resize: 'none' }}
             />
-            <button className="btn btn-primary" style={{ flexShrink: 0, padding: '10px 14px' }} disabled={sending || !reply.trim()}>
+            <button className="btn btn-primary" style={{ width: 'auto', flexShrink: 0, padding: '10px 14px' }} disabled={sending || !reply.trim()}>
               <Send size={16} />
             </button>
           </div>

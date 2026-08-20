@@ -401,7 +401,7 @@ function TicketModal({ ticket, adminUserId, onClose, onChanged }) {
               <input type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
             </label>
             <textarea rows={2} value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply to customer…" style={{ flex: 1, resize: 'none' }} />
-            <button className="btn btn-primary" style={{ flexShrink: 0, padding: '10px 14px' }} disabled={sending || !reply.trim()}>
+            <button className="btn btn-primary" style={{ width: 'auto', flexShrink: 0, padding: '10px 14px' }} disabled={sending || !reply.trim()}>
               <Send size={16} />
             </button>
           </div>
